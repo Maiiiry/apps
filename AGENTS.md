@@ -1,5 +1,3 @@
-사용자의 말은 있는 그대로 해석한다. 명시하지 않은 의도나 요구사항을 임의로 덧붙이거나, 요청의 의미와 범위를 확대하거나 바꾸지 않는다.
-
 # Repository working instructions
 
 ## Instruction and contract ownership
