@@ -39,6 +39,8 @@ Treat project IDs as stable enum-style values:
 ```ts
 enum ProjectId {
   Delcore = "delcore",
+  DevBase = "devbase",
+  DelinoSite = "delino-site",
   DeliDev = "delidev",
   DeliTools = "delitools",
 }

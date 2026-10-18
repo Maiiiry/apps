@@ -25,6 +25,8 @@ test("ordinary CI preserves affected-only dispatch and Linux allocation", () => 
   for (const job of Object.values(workflow.jobs))
     assert.equal(job["runs-on"], "ubuntu-latest");
   for (const [id, owner] of [
+    ["devbase-frontend", "devbase"],
+    ["delino-site-frontend", "delino_site"],
     ["delidev-frontend", "delidev"],
     ["delitools-frontend", "delitools"],
     ["delcore-api", "delcore"],
@@ -55,6 +57,8 @@ test("Rust retains native prerequisites and the former strict Clippy boundary", 
 test("validation evidence and main-only cache saves survive the job split", () => {
   for (const id of [
     "validate",
+    "devbase-frontend",
+    "delino-site-frontend",
     "delidev-frontend",
     "delitools-frontend",
     "rust-checks",
@@ -90,6 +94,8 @@ test("result aggregation rejects every selected failed, canceled or skipped job"
     workflow.jobs["ci-result"].needs.map((id) => [id, { result: "success" }]),
   );
   needs.changes.outputs = {
+    devbase: "true",
+    delino_site: "true",
     delidev: "true",
     delitools: "true",
     delcore: "true",
@@ -103,11 +109,19 @@ test("result aggregation rejects every selected failed, canceled or skipped job"
     }
   }
   needs.changes.outputs = {
+    devbase: "false",
+    delino_site: "false",
     delidev: "false",
     delitools: "false",
     delcore: "true",
   };
-  for (const id of ["delidev-frontend", "delitools-frontend", "rust-checks"])
+  for (const id of [
+    "devbase-frontend",
+    "delino-site-frontend",
+    "delidev-frontend",
+    "delitools-frontend",
+    "rust-checks",
+  ])
     needs[id].result = "skipped";
   assert.equal(run(needs).status, 0);
 });

@@ -2,7 +2,7 @@
 
 ## Scope
 
-`apps/delitools` owns the empty desktop and mobile application. The mobile release workflow owns signed build artifacts and test-channel uploads.
+`apps/delitools` owns the desktop, mobile and web application for useful end-user tools. Usage-based billing belongs to delcore. The web application domain is `https://delitools.delino.io`. The mobile release workflow owns signed build artifacts and test-channel uploads.
 
 ## Runtime and Language
 
@@ -10,13 +10,15 @@ React 19 and Rsbuild render an empty root. Rust uses the repository-pinned Tauri
 
 ## Users and Operators
 
-Developers launch the shell. Maintainers run the protected mobile distribution workflow.
+End users access tools on desktop, mobile and web. Developers launch the shell. Maintainers run the protected mobile distribution workflow.
 
 ## Interfaces and Contracts
 
 The title is `DeliTools`; the application identifier is `io.delino.delitools`. Desktop opens one decorated, resizable 1280 by 820 window and exits when the last window closes. Mobile opens one blank webview. There are no product controls, menus, commands, permissions, plugins, servers or API clients.
 
 `pnpm dev` serves the frontend on fixed loopback port 46312 and fails on conflicts. `pnpm dev:desktop` starts the desktop host. `pnpm mobile:android:init` and `pnpm mobile:ios:init` generate native projects; `pnpm dev:android` and `pnpm dev:ios` launch mobile development. Mobile build commands are `pnpm build:android` and `pnpm build:ios`. Local Android release builds remain unsigned when no upload keystore is supplied; the release workflow still requires and validates signing credentials.
+
+The shared frontend also runs as a standalone web application. Cloudflare Pages builds it from the repository root with `pnpm --filter delitools build` and publishes `apps/delitools/dist`. Include root `LICENSE` and `NOTICE` in web distributions. Domain binding and deployment require separate platform configuration. Future billable tools use server-side delcore authorization and metering; the scaffold does not implement billing or API clients.
 
 ## Storage
 

@@ -2,7 +2,7 @@
 
 ## Goal
 
-Provide an executable blank shell like DeliDev, with desktop, Android and iOS hosts and a mobile distribution pipeline.
+Provide useful end-user tools through desktop, mobile and web applications, with usage-based billing through delcore. Retain the desktop, Android and iOS hosts and the mobile distribution pipeline.
 
 ## Project ID
 
@@ -10,7 +10,7 @@ Provide an executable blank shell like DeliDev, with desktop, Android and iOS ho
 
 ## Domain Ownership Map
 
-- `apps/delitools`: shared empty React frontend, CEF desktop host and Wry mobile host.
+- `apps/delitools`: shared React frontend for the web application at `https://delitools.delino.io`, CEF desktop host and Wry mobile host.
 - `.github/workflows/release-delitools-mobile.yml`: signed Android internal testing and iOS TestFlight uploads.
 
 ## Domain Contract Documents
@@ -19,7 +19,7 @@ Provide an executable blank shell like DeliDev, with desktop, Android and iOS ho
 
 ## Cross-Domain Invariants
 
-All hosts render an empty root with the `DeliTools` application name and `io.delino.delitools` identifier. There is no product backend, account access, RPC or product storage. DeliDev remains a separate application. React, Rsbuild and Rust follow the existing DeliDev shell instead of the default new-project Go language. Mobile uses system webviews; CEF is desktop-only.
+All hosts render an empty root with the `DeliTools` application name and `io.delino.delitools` identifier. The scaffold has no product backend, account access, RPC or product storage. Future tools use delcore for usage-based billing; clients do not own billing or service credentials. The web build targets Cloudflare Pages. DeliDev remains a separate application. React, Rsbuild and Rust follow the existing DeliDev shell instead of the default new-project Go language. Mobile uses system webviews; CEF is desktop-only.
 
 ## Change Policy
 

@@ -8,6 +8,14 @@ export function select(paths) {
     (path) => !/^(apps|servers|protos|docs)\//u.test(path),
   );
   return {
+    devbase:
+      shared ||
+      paths.some((path) => /^(apps\/devbase\/|docs\/.*devbase)/u.test(path)),
+    delino_site:
+      shared ||
+      paths.some((path) =>
+        /^(apps\/delino-site\/|docs\/.*delino-site)/u.test(path),
+      ),
     delidev:
       shared ||
       paths.some((path) => /^(apps\/delidev\/|docs\/.*delidev)/u.test(path)),

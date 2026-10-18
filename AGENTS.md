@@ -50,8 +50,10 @@
 ## Monorepo Structure Map
 
 - `docs/`: Source of truth for project contracts and repository documentation.
+- `apps/devbase`: DevBase web application.
+- `apps/delino-site`: Delino web application.
 - `apps/delidev`: DeliDev desktop shell and native host.
-- `apps/delitools`: DeliTools desktop/mobile shell and mobile release helpers.
+- `apps/delitools`: DeliTools desktop/mobile/web application and mobile release helpers.
 - `servers/delcore-api`: Delcore service, migrations, sample client and OCI packaging.
 - `protos/delcore/v1`: Delcore schemas.
 - `protos/gen/go/delcore/v1`: Generated Go messages and Connect bindings.
@@ -72,6 +74,10 @@
 - `docs/project-delcore.md`: Delcore project ownership and cross-domain invariants.
 - `docs/servers-delcore-api-contract.md`: Delcore service contract.
 - `docs/protos-delcore-v1-contract.md`: Delcore protocol contract.
+- `docs/project-devbase.md`: DevBase project index.
+- `docs/apps-devbase-web-contract.md`: DevBase web application contract.
+- `docs/project-delino-site.md`: Delino project index.
+- `docs/apps-delino-site-web-contract.md`: Delino web application contract.
 - `docs/project-delidev.md`: DeliDev project index.
 - `docs/apps-delidev-desktop-contract.md`: DeliDev desktop shell contract.
 - `docs/project-delitools.md`: DeliTools project index.

@@ -20,3 +20,7 @@
 - [apps-delitools-foundation](../docs/apps-delitools-foundation.md)
 - [repository-environment-contract](../docs/repository-environment-contract.md)
 - [repository-workflow-contract](../docs/repository-workflow-contract.md)
+- [project-devbase](../docs/project-devbase.md)
+- [apps-devbase-web-contract](../docs/apps-devbase-web-contract.md)
+- [project-delino-site](../docs/project-delino-site.md)
+- [apps-delino-site-web-contract](../docs/apps-delino-site-web-contract.md)
