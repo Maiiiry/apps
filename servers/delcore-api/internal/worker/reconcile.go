@@ -4,7 +4,7 @@ package worker
 import (
 	"context"
 	"encoding/json"
-	"github.com/delinoio/oss/servers/delcore-api/internal/provider"
+	"github.com/delinoio/delino-apps/servers/delcore-api/internal/provider"
 	"github.com/jackc/pgx/v5"
 	"net/http"
 	"net/url"

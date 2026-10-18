@@ -2,8 +2,8 @@
 package rpc
 
 import (
-	"github.com/delinoio/oss/servers/delcore-api/internal/accounting"
-	"github.com/delinoio/oss/servers/delcore-api/internal/postgres"
+	"github.com/delinoio/delino-apps/servers/delcore-api/internal/accounting"
+	"github.com/delinoio/delino-apps/servers/delcore-api/internal/postgres"
 	"time"
 )
 

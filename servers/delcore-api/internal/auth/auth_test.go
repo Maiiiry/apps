@@ -7,7 +7,7 @@ import (
 	"crypto/rsa"
 	"encoding/base64"
 	"encoding/json"
-	"github.com/delinoio/oss/servers/delcore-api/internal/config"
+	"github.com/delinoio/delino-apps/servers/delcore-api/internal/config"
 	"github.com/golang-jwt/jwt/v4"
 	"net/http"
 	"net/http/httptest"

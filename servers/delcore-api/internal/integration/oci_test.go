@@ -5,7 +5,7 @@ package integration
 
 import (
 	"encoding/json"
-	"github.com/delinoio/oss/servers/delcore-api/migrations"
+	"github.com/delinoio/delino-apps/servers/delcore-api/migrations"
 	"os"
 	"os/exec"
 	"path/filepath"

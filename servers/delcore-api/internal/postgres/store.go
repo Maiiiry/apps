@@ -9,7 +9,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/delinoio/oss/servers/delcore-api/migrations"
+	"github.com/delinoio/delino-apps/servers/delcore-api/migrations"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )

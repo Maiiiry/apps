@@ -7,7 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
-	"github.com/delinoio/oss/servers/delcore-api/internal/config"
+	"github.com/delinoio/delino-apps/servers/delcore-api/internal/config"
 	"net/http"
 	"net/http/httptest"
 	"strings"

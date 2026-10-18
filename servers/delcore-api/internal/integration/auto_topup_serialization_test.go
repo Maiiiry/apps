@@ -9,10 +9,10 @@ import (
 	"testing"
 	"time"
 
-	pb "github.com/delinoio/oss/protos/gen/go/delcore/v1"
-	"github.com/delinoio/oss/protos/gen/go/delcore/v1/delcorev1connect"
-	"github.com/delinoio/oss/servers/delcore-api/internal/postgres"
-	"github.com/delinoio/oss/servers/delcore-api/internal/worker"
+	pb "github.com/delinoio/delino-apps/protos/gen/go/delcore/v1"
+	"github.com/delinoio/delino-apps/protos/gen/go/delcore/v1/delcorev1connect"
+	"github.com/delinoio/delino-apps/servers/delcore-api/internal/postgres"
+	"github.com/delinoio/delino-apps/servers/delcore-api/internal/worker"
 	"github.com/jackc/pgx/v5"
 )
 

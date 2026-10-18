@@ -10,9 +10,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/delinoio/oss/servers/delcore-api/internal/accounting"
-	"github.com/delinoio/oss/servers/delcore-api/internal/postgres"
-	"github.com/delinoio/oss/servers/delcore-api/internal/provider"
+	"github.com/delinoio/delino-apps/servers/delcore-api/internal/accounting"
+	"github.com/delinoio/delino-apps/servers/delcore-api/internal/postgres"
+	"github.com/delinoio/delino-apps/servers/delcore-api/internal/provider"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"

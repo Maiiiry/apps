@@ -17,7 +17,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/delinoio/oss/servers/delcore-api/internal/config"
+	"github.com/delinoio/delino-apps/servers/delcore-api/internal/config"
 )
 
 var ErrTransient = errors.New("provider transient failure")

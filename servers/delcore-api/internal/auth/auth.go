@@ -12,7 +12,7 @@ import (
 	"strings"
 
 	"github.com/coreos/go-oidc/v3/oidc"
-	"github.com/delinoio/oss/servers/delcore-api/internal/config"
+	"github.com/delinoio/delino-apps/servers/delcore-api/internal/config"
 )
 
 type Identity struct {

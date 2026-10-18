@@ -4,9 +4,9 @@ package rpc
 import (
 	"connectrpc.com/connect"
 	"context"
-	pb "github.com/delinoio/oss/protos/gen/go/delcore/v1"
-	"github.com/delinoio/oss/servers/delcore-api/internal/accounting"
-	"github.com/delinoio/oss/servers/delcore-api/internal/postgres"
+	pb "github.com/delinoio/delino-apps/protos/gen/go/delcore/v1"
+	"github.com/delinoio/delino-apps/servers/delcore-api/internal/accounting"
+	"github.com/delinoio/delino-apps/servers/delcore-api/internal/postgres"
 	"google.golang.org/protobuf/types/known/timestamppb"
 	"slices"
 	"sort"

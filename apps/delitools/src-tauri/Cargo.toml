@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "DeliTools desktop and mobile shell"
 edition = "2024"
 license = "Apache-2.0"
-repository = "https://github.com/delinoio/oss"
+repository = "https://github.com/delinoio/delino-apps"
 publish = false
 default-run = "delitools-shell"
 

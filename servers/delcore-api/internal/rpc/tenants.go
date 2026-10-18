@@ -12,8 +12,8 @@ import (
 	"time"
 
 	"connectrpc.com/connect"
-	pb "github.com/delinoio/oss/protos/gen/go/delcore/v1"
-	"github.com/delinoio/oss/servers/delcore-api/internal/postgres"
+	pb "github.com/delinoio/delino-apps/protos/gen/go/delcore/v1"
+	"github.com/delinoio/delino-apps/servers/delcore-api/internal/postgres"
 )
 
 // tenant reads a tenant. Blocked reports every condition that rejects new paid

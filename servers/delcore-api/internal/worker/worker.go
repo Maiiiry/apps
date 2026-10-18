@@ -11,9 +11,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/delinoio/oss/servers/delcore-api/internal/config"
-	"github.com/delinoio/oss/servers/delcore-api/internal/postgres"
-	"github.com/delinoio/oss/servers/delcore-api/internal/provider"
+	"github.com/delinoio/delino-apps/servers/delcore-api/internal/config"
+	"github.com/delinoio/delino-apps/servers/delcore-api/internal/postgres"
+	"github.com/delinoio/delino-apps/servers/delcore-api/internal/provider"
 	"github.com/jackc/pgx/v5"
 )
 

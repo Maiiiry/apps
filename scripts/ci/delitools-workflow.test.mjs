@@ -6,7 +6,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import yaml from "js-yaml";
-import { planJobs, Event } from "./plan.mjs";
 const root = new URL("../../", import.meta.url);
 const workflow = yaml.load(
   readFileSync(
@@ -44,21 +43,6 @@ test("DeliTools release is main-only, serialized and uses protected test-channel
   }
   assert.equal(workflow.jobs.ios["runs-on"], "macos-15");
   assert.equal(workflow.jobs.android["runs-on"], "ubuntu-22.04");
-});
-
-test("DeliTools app and release changes select affected validation without unrelated DevHud native jobs", () => {
-  for (const event of Object.values(Event)) {
-    for (const path of [
-      "apps/delitools/src/main.tsx",
-      ".github/workflows/release-delitools-mobile.yml",
-      "apps/delitools/scripts/publish-android.mjs",
-    ]) {
-      const plan = planJobs(event, [path]);
-      assert.equal(plan.jobs["delitools-frontend"], true, `${event}: ${path}`);
-      assert.equal(plan.jobs["delidev-frontend"], false);
-      assert.equal(plan.jobs["devhud-desktop"], false);
-    }
-  }
 });
 
 for (const [platform, stepName, filename] of [

@@ -1,0 +1,94 @@
+name: CI
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      base: ${{ steps.plan.outputs.base }}
+      head: ${{ steps.plan.outputs.head }}
+      delcore: ${{ steps.plan.outputs.delcore }}
+      delidev: ${{ steps.plan.outputs.delidev }}
+      delitools: ${{ steps.plan.outputs.delitools }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with: { fetch-depth: 0, persist-credentials: false }
+      - uses: ./.github/actions/setup-ci-node
+      - id: plan
+        env:
+          COMPARISON_BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: node scripts/ci/plan.mjs
+  validate:
+    needs: changes
+    runs-on: ubuntu-latest
+    env:
+      TURBO_SCM_BASE: ${{ needs.changes.outputs.base }}
+      TURBO_SCM_HEAD: ${{ needs.changes.outputs.head }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with: { fetch-depth: 0, persist-credentials: false, lfs: true }
+      - uses: ./.github/actions/setup-ci-node
+      - uses: actions/setup-go@v6
+        with: { go-version-file: go.mod }
+      - uses: dtolnay/rust-toolchain@v1
+        with: { toolchain: nightly-2026-09-28, components: rustfmt }
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm format:check
+      - run: pnpm test:tooling
+      - if: needs.changes.outputs.delidev == 'true'
+        run: pnpm --filter delidev-desktop test
+      - if: needs.changes.outputs.delitools == 'true'
+        run: pnpm --filter delitools test
+      - name: Validate affected Rust shells
+        if: needs.changes.outputs.delidev == 'true' || needs.changes.outputs.delitools == 'true'
+        env:
+          DELIDEV: ${{ needs.changes.outputs.delidev }}
+          DELITOOLS: ${{ needs.changes.outputs.delitools }}
+        run: |
+          cargo fmt --all --check
+          packages=()
+          if [ "$DELIDEV" = true ]; then packages+=(-p delidev-desktop); fi
+          if [ "$DELITOOLS" = true ]; then packages+=(-p delitools-shell); fi
+          cargo test --locked "${packages[@]}"
+      - name: Validate Delcore and protocol freshness
+        if: needs.changes.outputs.delcore == 'true'
+        run: |
+          node scripts/ci/check-go-format.mjs servers/delcore-api protos/gen/go
+          go vet ./...
+          go build ./servers/delcore-api/cmd/...
+          go test -race ./...
+          pnpm proto:lint
+          pnpm proto:generate
+          git diff --exit-code -- protos/gen/go
+          node scripts/check-proto-breaking.mjs "$TURBO_SCM_BASE"
+      - name: Start integration database
+        if: needs.changes.outputs.delcore == 'true'
+        run: |
+          docker run --detach --name delcore-postgres -p 127.0.0.1:5432:5432 -e POSTGRES_USER=delcore -e POSTGRES_PASSWORD=delcore -e POSTGRES_DB=delcore_api_test --health-cmd 'pg_isready -U delcore -d delcore_api_test' --health-interval 2s --health-retries 30 postgres:17
+          for attempt in $(seq 1 60); do
+            if [ "$(docker inspect --format '{{.State.Health.Status}}' delcore-postgres)" = healthy ]; then exit 0; fi
+            sleep 2
+          done
+          docker logs delcore-postgres
+          exit 1
+      - name: Integration and OCI tests
+        if: needs.changes.outputs.delcore == 'true'
+        env:
+          DELCORE_TEST_DATABASE_URL: postgres://delcore:delcore@127.0.0.1:5432/delcore_api_test?sslmode=disable
+        run: |
+          pnpm --filter @delinoio/delcore-api ci:integration
+          pnpm --filter @delinoio/delcore-api ci:oci
+      - name: Record validation boundary
+        if: always()
+        env:
+          RESULT: ${{ job.status }}
+        run: |
+          printf 'revision=%s\nresult=%s\n' "$GITHUB_SHA" "$RESULT" >> "$GITHUB_STEP_SUMMARY"
+          printf '%s\n' 'Commands and results are retained in step logs. Native launches, device installation, live provider accounts and store uploads are not exercised by CI.' >> "$GITHUB_STEP_SUMMARY"
+          rm -rf apps/delidev/dist apps/delitools/dist
+          docker rm --force delcore-postgres >/dev/null 2>&1 || true

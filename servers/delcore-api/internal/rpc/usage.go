@@ -7,12 +7,12 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"github.com/delinoio/oss/servers/delcore-api/internal/postgres"
+	"github.com/delinoio/delino-apps/servers/delcore-api/internal/postgres"
 	"time"
 
 	"connectrpc.com/connect"
-	pb "github.com/delinoio/oss/protos/gen/go/delcore/v1"
-	"github.com/delinoio/oss/servers/delcore-api/internal/accounting"
+	pb "github.com/delinoio/delino-apps/protos/gen/go/delcore/v1"
+	"github.com/delinoio/delino-apps/servers/delcore-api/internal/accounting"
 	"github.com/jackc/pgx/v5"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
