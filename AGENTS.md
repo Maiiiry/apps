@@ -12,7 +12,7 @@
 
 - Do not add issue or pull-request links or identifying numbers to repository instruction files or documentation. Describe requirements directly and link to the owning repository-local contracts. Domain, service and technical-documentation links remain allowed; record issue/PR traceability in pull requests, issues or CI records instead.
 
-- Use the `@docs/` directory as the source of truth for project contracts and implementation documents.
+- Use the `docs/` directory as the source of truth for project contracts and implementation documents.
 - License repository-owned source and future distributions under AGPL-3.0-only. Keep imported code and bundled fonts under their original licenses with notices intact; follow `docs/repository-license-contract.md`.
 - All repository-wide rules must be defined in the appropriate AGENTS.md.
 - Every repository-owned directory named `dist` is ignored generated output and must never be tracked. Generate required `dist` content explicitly before compilation, testing, or packaging, and remove generated `dist` directories from the final worktree.
@@ -36,15 +36,11 @@
 - When no explicit scope is specified and you are currently working within a pull request scope, interpret instructions within the current pull request scope.
 - Do not guess; rather search for the web.
 - Follow `docs/repository-dependency-security-contract.md` for dependency security updates, validation evidence, and unresolved upstream constraints. Keep unresolved advisories visible; a fixed runtime pin or an unavailable patch is not a vulnerability fix.
-- Debug by logging. You should write enough logging code.
-- Write sufficient logs for debugging and operational troubleshooting.
-- Prefer structured logging libraries for business and system logs (Go: `log/slog`, Rust: `tracing`).
 - Prioritize Connect RPC-based communication for business flows over Tauri-specific bindings.
 - Prefer React Query for frontend server-state management when it is available.
 - When using React Query with Connect RPC, use `@connectrpc/connect-query` from `https://github.com/connectrpc/connect-query-es`.
 - When accessing `github.com`, use the GitHub CLI (`gh`) instead of browser-based workflows when possible.
 - Run GitHub CLI (`gh`) commands outside sandbox restrictions by default; use the required approval flow when escalation is needed.
-- When writing shell commands or scripts, treat backticks and command substitution carefully, prefer `$(...)` over legacy backticks, and apply strict escaping for all dynamic values.
 - If an operation is blocked by sandbox restrictions, retry it without sandbox restrictions using the required approval flow.
 
 ## Monorepo Structure Map
@@ -62,25 +58,7 @@
 
 ## Canonical Directory Map
 
-- `docs/README.md`: Canonical documentation catalog and naming rules.
-- `docs/repository-defaults.md`: Default technology and workflow choices.
-- `docs/repository-environment-contract.md`: Configuration and secret ownership.
-- `docs/repository-workflow-contract.md`: CI, release, formatting and validation procedures.
-- `docs/repository-license-contract.md`: Source and distribution licenses.
-- `docs/repository-dependency-security-contract.md`: Dependency validation and unresolved upstream constraints.
-- `docs/project-template.md`: Required project index structure.
-- `docs/domain-template.md`: Required domain contract structure.
-- `docs/project-delcore.md`: Delcore project ownership and cross-domain invariants.
-- `docs/servers-delcore-api-contract.md`: Delcore service contract.
-- `docs/protos-delcore-v1-contract.md`: Delcore protocol contract.
-- `docs/project-devbase.md`: DevBase project index.
-- `docs/apps-devbase-web-contract.md`: DevBase web application contract.
-- `docs/project-delino-site.md`: Delino project index.
-- `docs/apps-delino-site-web-contract.md`: Delino web application contract.
-- `docs/project-delidev.md`: DeliDev project index.
-- `docs/apps-delidev-desktop-contract.md`: DeliDev desktop shell contract.
-- `docs/project-delitools.md`: DeliTools project index.
-- `docs/apps-delitools-foundation.md`: DeliTools application and mobile distribution contract.
+Use the [documentation catalog](docs/README.md) for the complete list of repository contracts, project indexes, domain contracts and templates. Project indexes own canonical paths and integration boundaries; keep the detailed document list in the catalog.
 
 ## Repository Default Technology Choices
 
@@ -95,9 +73,11 @@
 ## Documentation-First Policy
 
 - New project creation requires `docs/project-<id>.md` and at least one `docs/<domain>-<project-or-component>-<contract>.md` before runtime implementation.
-- Every structural change to project paths must update the corresponding project index and relevant domain contract docs in the same change.
+- Every structural repository change, including changes to project paths, must update the corresponding project index and relevant domain contract docs in the same change.
 - Development-procedure, directory-ownership and repository/domain development-rule updates must be written in the appropriate `AGENTS.md` in the same change.
 - Domain-level `AGENTS.md` files must route to their owning contracts and follow the instruction-update policy.
+- When user-facing documentation content changes, update the relevant public documentation pages in the same change set as needed. This repository currently has no public documentation app.
+- If a project splits into multiple deployables, the project index must include path ownership and integration boundaries, and component-level domain docs must exist.
 
 ## New Project Onboarding Checklist
 
@@ -105,7 +85,7 @@
 - Create project path skeleton and add `.gitkeep` if implementation is not started.
 - Add `docs/project-<project-id>.md` using `docs/project-template.md`.
 - Add at least one domain contract doc using `docs/domain-template.md`.
-- Documentation-only phase may mark canonical paths as `planned` before creating path skeletons; create the skeleton and add explicit workspace membership in the same change where Rust runtime implementation begins.
+- Documentation-only phase may mark canonical paths as `planned` before creating path skeletons; create and document the skeleton before runtime implementation begins, and add explicit workspace membership in the same change where Rust runtime implementation begins.
 - Update root and domain `AGENTS.md` files when directory ownership or development rules change.
 - Ensure path and naming contracts are consistent across docs and AGENTS rules.
 
@@ -168,23 +148,11 @@
 
 ## Logging Rules
 
-- Write sufficient logs to support debugging, incident analysis, and operational troubleshooting.
+- Debug by logging. Write sufficient logs to support debugging, incident analysis, and operational troubleshooting.
 - Prefer structured logging over ad-hoc plain text logs for business and system events.
 - Go code should use `log/slog` (or a compatible structured logger built on it).
 - Rust code should use `tracing` (or a compatible structured logging facade).
 - CLI and operator-facing logs should enable ANSI color by default; allow opt-out with documented flags or environment variables.
-
-## Documentation Lifecycle Rules
-
-- Every structural repository change must update relevant project index docs and domain contract docs in the same change set.
-- New project creation is blocked until its project index doc and at least one domain contract doc exist.
-- Documentation-only project onboarding may use `planned` paths, but runtime implementation must not begin before canonical paths are created and documented.
-- Repository-wide and domain rules must be maintained in the appropriate `AGENTS.md`.
-- Documentation policy updates and documentation changes that introduce or modify repository/domain development rules must update the relevant `AGENTS.md` files in the same change, and documentation edits must not silently omit or reinterpret ambiguous requested or source-backed content without user confirmation.
-- When user-facing documentation content changes, update the relevant public documentation pages in the same change set as needed. This repository currently has no public documentation app.
-- Run `git commit` only after `git add`; once files are staged, create the commit without unnecessary delay.
-- After addressing pull request review comments and pushing updates, resolve the corresponding review threads.
-- If a project splits into multiple deployables, the project index must include path ownership and integration boundaries, and component-level domain docs must exist.
 
 ## Contract navigation
 

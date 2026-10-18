@@ -2,14 +2,14 @@
 
 ## Purpose
 
-`docs/` is the source of truth for repository contracts. Each project has one project index and one or more domain contracts. Read [root instructions](../AGENTS.md) and the relevant domain instructions before implementation.
+`docs/` is the source of truth for repository contracts. Each project has one project index and one or more domain contracts. Read [root instructions](../AGENTS.md) and the relevant domain instructions before implementation. This catalog owns the complete document list; root instructions link here instead of maintaining a second list.
 
 ## Repository Defaults
 
-- Repository-wide default technology choices and workflow defaults are defined in `docs/repository-defaults.md`.
-- Repository licensing and third-party notice boundaries are defined in `docs/repository-license-contract.md`.
+- Repository-wide default technology choices and workflow defaults are defined in [repository defaults](repository-defaults.md).
+- Repository licensing and third-party notice boundaries are defined in [license contract](repository-license-contract.md).
 - Dependency security updates, audit evidence, and unresolved upstream constraints are recorded in [the dependency security contract](repository-dependency-security-contract.md).
-- Repository configuration, environment ownership, and secret classification are defined in `docs/repository-environment-contract.md`.
+- Repository configuration, environment ownership, and secret classification are defined in [environment contract](repository-environment-contract.md).
 - Project and domain contracts must document deviations from those defaults when a different language, ID format, search backend, build toolchain, static-site deployment platform, or file storage/access pattern is chosen.
 
 ## Instruction Update Policy
@@ -37,9 +37,8 @@ Record new implementation status, validation results and unresolved limits in pu
 
 ## Templates
 
-- `docs/repository-defaults.md`: repository-wide default technology choices and workflow defaults
-- `docs/project-template.md`: template for project index docs
-- `docs/domain-template.md`: template for domain contract docs
+- [Project index template](project-template.md): template for project index docs
+- [Domain contract template](domain-template.md): template for domain contract docs
 
 ## Project catalog
 
