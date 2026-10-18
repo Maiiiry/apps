@@ -1,9 +1,10 @@
 name: CI
-on:
-  pull_request:
+"on":
+  pull_request: null
   push:
-    branches: [main]
-  workflow_dispatch:
+    branches:
+      - main
+  workflow_dispatch: null
 permissions:
   contents: read
 jobs:
@@ -17,7 +18,9 @@ jobs:
       delitools: ${{ steps.plan.outputs.delitools }}
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
-        with: { fetch-depth: 0, persist-credentials: false }
+        with:
+          fetch-depth: 0
+          persist-credentials: false
       - uses: ./.github/actions/setup-ci-node
       - id: plan
         env:
@@ -31,32 +34,234 @@ jobs:
       TURBO_SCM_HEAD: ${{ needs.changes.outputs.head }}
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
-        with: { fetch-depth: 0, persist-credentials: false, lfs: true }
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          lfs: true
       - uses: ./.github/actions/setup-ci-node
+        id: node
       - uses: actions/setup-go@v6
-        with: { go-version-file: go.mod }
-      - uses: dtolnay/rust-toolchain@v1
-        with: { toolchain: nightly-2026-09-28, components: rustfmt }
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm format:check
-      - run: pnpm test:tooling
-      - if: needs.changes.outputs.delidev == 'true'
+        with:
+          go-version-file: go.mod
+      - id: dependencies
+        run: pnpm install --frozen-lockfile --ignore-scripts
+      - id: format
+        run: pnpm format:check
+      - id: tooling
+        run: pnpm test:tooling
+      - id: workflows
+        run: go tool actionlint -shellcheck=''
+      - name: Save pnpm cache after successful main validation
+        if: ${{ success() && github.ref == 'refs/heads/main' && steps.node.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25
+        with:
+          path: ${{ steps.node.outputs.cache-path }}
+          key: ${{ steps.node.outputs.cache-key }}
+      - name: Record validation
+        if: ${{ always() }}
+        env:
+          VALIDATION_JOB: validate
+          VALIDATION_RESULT: ${{ job.status }}
+          VALIDATION_STEPS: ${{ toJSON(steps) }}
+        run: node scripts/ci/record-validation.mjs
+      - name: Preserve validation evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: validation-validate-${{ github.run_attempt }}
+          path: .ci-evidence/
+          include-hidden-files: true
+          if-no-files-found: error
+      - name: Remove generated output
+        if: ${{ always() }}
+        run: rm -rf apps/delidev/dist apps/delitools/dist
+  delidev-frontend:
+    needs: changes
+    if: needs.changes.outputs.delidev == 'true'
+    runs-on: ubuntu-latest
+    env:
+      TURBO_SCM_BASE: ${{ needs.changes.outputs.base }}
+      TURBO_SCM_HEAD: ${{ needs.changes.outputs.head }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          lfs: true
+      - uses: ./.github/actions/setup-ci-node
+        id: node
+      - id: dependencies
+        run: pnpm install --frozen-lockfile --ignore-scripts
+      - id: frontend
         run: pnpm --filter delidev-desktop test
-      - if: needs.changes.outputs.delitools == 'true'
+      - name: Save pnpm cache after successful main validation
+        if: ${{ success() && github.ref == 'refs/heads/main' && steps.node.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25
+        with:
+          path: ${{ steps.node.outputs.cache-path }}
+          key: ${{ steps.node.outputs.cache-key }}
+      - name: Record validation
+        if: ${{ always() }}
+        env:
+          VALIDATION_JOB: delidev-frontend
+          VALIDATION_RESULT: ${{ job.status }}
+          VALIDATION_STEPS: ${{ toJSON(steps) }}
+        run: node scripts/ci/record-validation.mjs
+      - name: Preserve validation evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: validation-delidev-frontend-${{ github.run_attempt }}
+          path: .ci-evidence/
+          include-hidden-files: true
+          if-no-files-found: error
+      - name: Remove generated output
+        if: ${{ always() }}
+        run: rm -rf apps/delidev/dist apps/delitools/dist
+  delitools-frontend:
+    needs: changes
+    if: needs.changes.outputs.delitools == 'true'
+    runs-on: ubuntu-latest
+    env:
+      TURBO_SCM_BASE: ${{ needs.changes.outputs.base }}
+      TURBO_SCM_HEAD: ${{ needs.changes.outputs.head }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          lfs: true
+      - uses: ./.github/actions/setup-ci-node
+        id: node
+      - id: dependencies
+        run: pnpm install --frozen-lockfile --ignore-scripts
+      - id: frontend
         run: pnpm --filter delitools test
-      - name: Validate affected Rust shells
-        if: needs.changes.outputs.delidev == 'true' || needs.changes.outputs.delitools == 'true'
+      - name: Save pnpm cache after successful main validation
+        if: ${{ success() && github.ref == 'refs/heads/main' && steps.node.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25
+        with:
+          path: ${{ steps.node.outputs.cache-path }}
+          key: ${{ steps.node.outputs.cache-key }}
+      - name: Record validation
+        if: ${{ always() }}
+        env:
+          VALIDATION_JOB: delitools-frontend
+          VALIDATION_RESULT: ${{ job.status }}
+          VALIDATION_STEPS: ${{ toJSON(steps) }}
+        run: node scripts/ci/record-validation.mjs
+      - name: Preserve validation evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: validation-delitools-frontend-${{ github.run_attempt }}
+          path: .ci-evidence/
+          include-hidden-files: true
+          if-no-files-found: error
+      - name: Remove generated output
+        if: ${{ always() }}
+        run: rm -rf apps/delidev/dist apps/delitools/dist
+  rust-checks:
+    needs: changes
+    if: needs.changes.outputs.delidev == 'true' || needs.changes.outputs.delitools == 'true'
+    runs-on: ubuntu-latest
+    env:
+      TURBO_SCM_BASE: ${{ needs.changes.outputs.base }}
+      TURBO_SCM_HEAD: ${{ needs.changes.outputs.head }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          lfs: true
+      - uses: ./.github/actions/setup-ci-node
+        id: node
+      - uses: dtolnay/rust-toolchain@v1
+        with:
+          toolchain: nightly-2026-09-28
+          components: rustfmt, clippy
+      - id: dependencies
+        run: pnpm install --frozen-lockfile --ignore-scripts
+      - id: native-prerequisites
+        name: Install Linux native prerequisites
+        run: |-
+          sudo apt-get update
+          sudo apt-get install -y clang cmake libayatana-appindicator3-dev libgbm-dev libgtk-3-dev libgtk-4-dev xdg-desktop-portal xdg-desktop-portal-gtk zenity libwebkit2gtk-4.1-dev libx11-dev libxtst-dev ninja-build
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+          cache-on-failure: false
+      - id: delidev-build
+        if: needs.changes.outputs.delidev == 'true'
+        run: pnpm --filter delidev-desktop build:frontend
+      - id: delitools-build
+        if: needs.changes.outputs.delitools == 'true'
+        run: pnpm --filter delitools build:frontend
+      - id: rustfmt
+        run: cargo fmt --all --check
+      - id: test
         env:
           DELIDEV: ${{ needs.changes.outputs.delidev }}
           DELITOOLS: ${{ needs.changes.outputs.delitools }}
-        run: |
-          cargo fmt --all --check
+        run: |-
           packages=()
           if [ "$DELIDEV" = true ]; then packages+=(-p delidev-desktop); fi
           if [ "$DELITOOLS" = true ]; then packages+=(-p delitools-shell); fi
-          cargo test --locked "${packages[@]}"
+          cargo test --locked "${packages[@]}" --all-targets
+      - id: clippy
+        env:
+          DELIDEV: ${{ needs.changes.outputs.delidev }}
+          DELITOOLS: ${{ needs.changes.outputs.delitools }}
+        run: |-
+          packages=()
+          if [ "$DELIDEV" = true ]; then packages+=(-p delidev-desktop); fi
+          if [ "$DELITOOLS" = true ]; then packages+=(-p delitools-shell); fi
+          cargo clippy --locked "${packages[@]}" --all-targets --all-features -- -D warnings
+      - name: Save pnpm cache after successful main validation
+        if: ${{ success() && github.ref == 'refs/heads/main' && steps.node.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25
+        with:
+          path: ${{ steps.node.outputs.cache-path }}
+          key: ${{ steps.node.outputs.cache-key }}
+      - name: Record validation
+        if: ${{ always() }}
+        env:
+          VALIDATION_JOB: rust-checks
+          VALIDATION_RESULT: ${{ job.status }}
+          VALIDATION_STEPS: ${{ toJSON(steps) }}
+        run: node scripts/ci/record-validation.mjs
+      - name: Preserve validation evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: validation-rust-checks-${{ github.run_attempt }}
+          path: .ci-evidence/
+          include-hidden-files: true
+          if-no-files-found: error
+      - name: Remove generated output
+        if: ${{ always() }}
+        run: rm -rf apps/delidev/dist apps/delitools/dist
+  delcore-api:
+    needs: changes
+    if: needs.changes.outputs.delcore == 'true'
+    runs-on: ubuntu-latest
+    env:
+      TURBO_SCM_BASE: ${{ needs.changes.outputs.base }}
+      TURBO_SCM_HEAD: ${{ needs.changes.outputs.head }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          lfs: true
+      - uses: ./.github/actions/setup-ci-node
+        id: node
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - id: dependencies
+        run: pnpm install --frozen-lockfile --ignore-scripts
       - name: Validate Delcore and protocol freshness
-        if: needs.changes.outputs.delcore == 'true'
         run: |
           node scripts/ci/check-go-format.mjs servers/delcore-api protos/gen/go
           go vet ./...
@@ -64,10 +269,10 @@ jobs:
           go test -race ./...
           pnpm proto:lint
           pnpm proto:generate
-          git diff --exit-code -- protos/gen/go
+          test -z "$(git status --porcelain --untracked-files=all -- protos/gen/go)"
           node scripts/check-proto-breaking.mjs "$TURBO_SCM_BASE"
+        id: unit-protocol
       - name: Start integration database
-        if: needs.changes.outputs.delcore == 'true'
         run: |
           docker run --detach --name delcore-postgres -p 127.0.0.1:5432:5432 -e POSTGRES_USER=delcore -e POSTGRES_PASSWORD=delcore -e POSTGRES_DB=delcore_api_test --health-cmd 'pg_isready -U delcore -d delcore_api_test' --health-interval 2s --health-retries 30 postgres:17
           for attempt in $(seq 1 60); do
@@ -76,19 +281,61 @@ jobs:
           done
           docker logs delcore-postgres
           exit 1
+        id: postgres
       - name: Integration and OCI tests
-        if: needs.changes.outputs.delcore == 'true'
         env:
           DELCORE_TEST_DATABASE_URL: postgres://delcore:delcore@127.0.0.1:5432/delcore_api_test?sslmode=disable
         run: |
           pnpm --filter @delinoio/delcore-api ci:integration
           pnpm --filter @delinoio/delcore-api ci:oci
-      - name: Record validation boundary
-        if: always()
+        id: integration-oci
+      - name: Save pnpm cache after successful main validation
+        if: ${{ success() && github.ref == 'refs/heads/main' && steps.node.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25
+        with:
+          path: ${{ steps.node.outputs.cache-path }}
+          key: ${{ steps.node.outputs.cache-key }}
+      - name: Record validation
+        if: ${{ always() }}
         env:
-          RESULT: ${{ job.status }}
-        run: |
-          printf 'revision=%s\nresult=%s\n' "$GITHUB_SHA" "$RESULT" >> "$GITHUB_STEP_SUMMARY"
-          printf '%s\n' 'Commands and results are retained in step logs. Native launches, device installation, live provider accounts and store uploads are not exercised by CI.' >> "$GITHUB_STEP_SUMMARY"
+          VALIDATION_JOB: delcore-api
+          VALIDATION_RESULT: ${{ job.status }}
+          VALIDATION_STEPS: ${{ toJSON(steps) }}
+        run: node scripts/ci/record-validation.mjs
+      - name: Preserve validation evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: validation-delcore-api-${{ github.run_attempt }}
+          path: .ci-evidence/
+          include-hidden-files: true
+          if-no-files-found: error
+      - name: Remove generated output
+        if: ${{ always() }}
+        run: |-
           rm -rf apps/delidev/dist apps/delitools/dist
           docker rm --force delcore-postgres >/dev/null 2>&1 || true
+  ci-result:
+    if: ${{ always() }}
+    needs:
+      - changes
+      - validate
+      - delidev-frontend
+      - delitools-frontend
+      - rust-checks
+      - delcore-api
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require every selected job
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+        run: |-
+          node --input-type=module <<'NODE'
+          const needs = JSON.parse(process.env.NEEDS);
+          const selection = needs.changes.outputs;
+          const expected = { changes: true, validate: true, 'delidev-frontend': selection.delidev === 'true', 'delitools-frontend': selection.delitools === 'true', 'rust-checks': selection.delidev === 'true' || selection.delitools === 'true', 'delcore-api': selection.delcore === 'true' };
+          for (const [id, required] of Object.entries(expected)) {
+            const result = needs[id]?.result;
+            if (result !== (required ? 'success' : 'skipped')) throw new Error(id + ': ' + result);
+          }
+          NODE
