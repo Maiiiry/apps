@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: AGPL-3.0-only
 package postgres
 
 // PeriodExpiredSQL returns the SQL condition for a tenant whose confirmed paid

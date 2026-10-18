@@ -2,7 +2,7 @@
   "name": "delino-apps",
   "packageManager": "pnpm@10.26.2",
   "private": true,
-  "license": "Apache-2.0",
+  "license": "AGPL-3.0-only",
   "scripts": {
     "prepare": "./scripts/install-git-hooks.sh",
     "build": "turbo run build",

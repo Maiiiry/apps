@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: AGPL-3.0-only
 import { createSign } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";

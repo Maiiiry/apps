@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: AGPL-3.0-only
 import { spawn } from "node:child_process";
 import { globSync } from "node:fs";
 import { fileURLToPath } from "node:url";

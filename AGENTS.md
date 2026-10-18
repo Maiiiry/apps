@@ -8,5 +8,5 @@
 - Commit after staging without delay. Do not bypass hooks. Use the pinned Rstack formatter through `pnpm format` and `pnpm format:check`; hooks format staged files and preserve unstaged edits.
 - Preserve affected manual CI and keep macOS out of ordinary CI. Follow the workflow contract.
 - Never commit credentials or signing material. Follow the environment and dependency security contracts.
-- Repository code is Apache-2.0; preserve third-party notices. Track assets of at least 512 KiB in exact-path Git LFS attributes.
+- Repository code is AGPL-3.0-only; preserve third-party notices. Track assets of at least 512 KiB in exact-path Git LFS attributes.
 - Follow Toss Design Guidelines for frontend changes, focus single critical inputs, and support Esc in dialogs.

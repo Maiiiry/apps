@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: AGPL-3.0-only
 // Package accounting implements exact decimal arithmetic without float conversions.
 package accounting
 

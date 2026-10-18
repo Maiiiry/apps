@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: AGPL-3.0-only
 // Command sample-client demonstrates authenticated tenant discovery without an SDK package.
 package main
 

@@ -1,4 +1,4 @@
--- SPDX-License-Identifier: Apache-2.0
+-- SPDX-License-Identifier: AGPL-3.0-only
 CREATE TABLE usage_replay (
  service_id uuid NOT NULL REFERENCES services(id), event_key text NOT NULL,
  event_id uuid NOT NULL, fingerprint text NOT NULL,

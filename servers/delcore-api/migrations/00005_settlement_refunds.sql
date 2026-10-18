@@ -1,4 +1,4 @@
--- SPDX-License-Identifier: Apache-2.0
+-- SPDX-License-Identifier: AGPL-3.0-only
 -- Provider refunds apply to an invoice line that can cover several meters.
 -- Null service attribution denotes this tenant-level payment adjustment.
 ALTER TABLE settlements ALTER COLUMN service_id DROP NOT NULL;

@@ -1,4 +1,4 @@
--- SPDX-License-Identifier: Apache-2.0
+-- SPDX-License-Identifier: AGPL-3.0-only
 CREATE TABLE users (
  id uuid PRIMARY KEY, issuer text NOT NULL, subject_hash text NOT NULL,
  email text NOT NULL, withdrawing_at timestamptz,

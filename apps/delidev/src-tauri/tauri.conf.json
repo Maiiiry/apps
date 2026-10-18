@@ -20,7 +20,7 @@
   },
   "bundle": {
     "active": false,
-    "license": "Apache-2.0",
+    "license": "AGPL-3.0-only",
     "icon": ["icons/icon.png", "icons/icon.ico"],
     "resources": {
       "../../../LICENSE": "notices/LICENSE",
