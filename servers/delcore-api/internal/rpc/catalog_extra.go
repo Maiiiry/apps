@@ -4,7 +4,7 @@ package rpc
 import (
 	"connectrpc.com/connect"
 	"context"
-	pb "github.com/delinoio/delino-apps/protos/gen/go/delcore/v1"
+	pb "github.com/delinoio/delino-apps/protos/delcore/v1"
 )
 
 func (s *Server) PutMeter(ctx context.Context, r *connect.Request[pb.PutMeterRequest]) (*connect.Response[pb.PutMeterResponse], error) {

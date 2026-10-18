@@ -23,8 +23,8 @@ import (
 	"time"
 
 	"connectrpc.com/connect"
-	pb "github.com/delinoio/delino-apps/protos/gen/go/delcore/v1"
-	"github.com/delinoio/delino-apps/protos/gen/go/delcore/v1/delcorev1connect"
+	pb "github.com/delinoio/delino-apps/protos/delcore/v1"
+	"github.com/delinoio/delino-apps/protos/delcore/v1/delcorev1connect"
 	"github.com/delinoio/delino-apps/servers/delcore-api/internal/accounting"
 	"github.com/delinoio/delino-apps/servers/delcore-api/internal/auth"
 	"github.com/delinoio/delino-apps/servers/delcore-api/internal/config"

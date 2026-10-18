@@ -2,7 +2,7 @@
 
 ## Scope
 
-Schemas live in `protos/delcore/v1`. Generated messages and Connect-Go bindings live in `protos/gen/go/delcore/v1`.
+Schemas and generated Go messages live together in `protos/delcore/v1`. Connect-Go bindings live in its `delcorev1connect` subdirectory.
 
 ## Runtime and Language
 
@@ -40,7 +40,7 @@ Correlate responses and logs without exposing credentials or raw provider payloa
 
 ## Build and Test
 
-Use the root Buf generation, lint, formatting, breaking and freshness checks. Add Connect contract tests and a Go sample client against real PostgreSQL and mocked external services. Do not generate a TypeScript SDK.
+Use the root Buf generation, lint, formatting, breaking and freshness checks. Generation must preserve schemas and instruction files in the shared output tree. Remove obsolete generated files when deleting or renaming schemas. Add Connect contract tests and a Go sample client against real PostgreSQL and mocked external services. Do not generate a TypeScript SDK.
 
 ## Dependencies and Integrations
 

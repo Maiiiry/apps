@@ -13,7 +13,6 @@ define.fmt({
     "**/third-party/**",
     "**/testdata/**",
     "**/fixtures/**",
-    "protos/gen/**",
     "packages/*/src/gen/**",
     "apps/bundlewhy-web/src/gen/**",
     "**/*.generated.*",

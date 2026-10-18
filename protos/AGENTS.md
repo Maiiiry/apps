@@ -9,6 +9,7 @@
 - Follow root `AGENTS.md` and the owning project/domain contracts.
 
 - Write schemas and comments in English.
+- Keep generated Go code beside its owning schemas as defined in the protocol contract. Generation must preserve schema and instruction files.
 
 ## Owning contracts
 

@@ -351,13 +351,13 @@ jobs:
         run: pnpm install --frozen-lockfile --ignore-scripts
       - name: Validate Delcore and protocol freshness
         run: |
-          node scripts/ci/check-go-format.mjs servers/delcore-api protos/gen/go
+          node scripts/ci/check-go-format.mjs servers/delcore-api protos
           go vet ./...
           go build ./servers/delcore-api/cmd/...
           go test -race ./...
           pnpm proto:lint
           pnpm proto:generate
-          test -z "$(git status --porcelain --untracked-files=all -- protos/gen/go)"
+          test -z "$(git status --porcelain --untracked-files=all -- protos)"
           node scripts/check-proto-breaking.mjs "$TURBO_SCM_BASE"
         id: unit-protocol
       - name: Start integration database

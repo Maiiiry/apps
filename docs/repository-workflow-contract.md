@@ -10,7 +10,7 @@ The Tauri wrapper consumes the immutable release and hashes in `prebuilt-depende
 
 Use root `pnpm format` and `pnpm format:check` for changed supported files. Lefthook formats staged files while preserving unstaged changes. CI passes the exact comparison through `TURBO_SCM_BASE` and `TURBO_SCM_HEAD`. Track assets of at least 512 KiB with exact-path Git LFS entries and hydrate them before builds. Schema-only baseline checks skip unrelated LFS smudging.
 
-The import baseline uses the former Go module path. Breaking validation normalizes only that exact old `go_package` option to the new module path, preserving all wire and remaining FILE checks. Remove this compatibility projection when all supported baselines use this repository.
+Older baselines use the former Go module path or the separate generated-code directory. Breaking validation normalizes only those two exact old `go_package` options to the colocated package path, preserving all wire and remaining FILE checks. Remove this compatibility projection when all supported baselines use the colocated package path.
 
 CI retains separate `devbase-frontend`, `delino-site-frontend`, `delidev-frontend`, `delitools-frontend`, `rust-checks`, and `delcore-api` jobs. The planner gates each project job before runner allocation. `validate` checks formatting, tooling fixtures, and workflow syntax. `ci-result` fails if any selected job fails, is canceled, or is skipped. Unselected project jobs must remain skipped.
 

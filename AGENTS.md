@@ -55,8 +55,7 @@
 - `apps/delidev`: DeliDev desktop shell and native host.
 - `apps/delitools`: DeliTools desktop/mobile/web application and mobile release helpers.
 - `servers/delcore-api`: Delcore service, migrations, sample client and OCI packaging.
-- `protos/delcore/v1`: Delcore schemas.
-- `protos/gen/go/delcore/v1`: Generated Go messages and Connect bindings.
+- `protos/delcore/v1`: Delcore schemas, generated Go messages and Connect bindings.
 - `scripts/`: Shared build and development support.
 - `scripts/ci/`: Affected selection, validation and evidence tooling.
 - `.github/`: CI actions and workflows, including mobile release automation.

@@ -4,7 +4,7 @@ package rpc
 import (
 	"connectrpc.com/connect"
 	"context"
-	pb "github.com/delinoio/delino-apps/protos/gen/go/delcore/v1"
+	pb "github.com/delinoio/delino-apps/protos/delcore/v1"
 	"github.com/delinoio/delino-apps/servers/delcore-api/internal/accounting"
 	"github.com/delinoio/delino-apps/servers/delcore-api/internal/postgres"
 	"google.golang.org/protobuf/types/known/timestamppb"
