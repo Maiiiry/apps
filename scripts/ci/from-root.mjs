@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: FSL-1.1-ALv2
 import { spawn } from "node:child_process";
 import { globSync } from "node:fs";
 import { fileURLToPath } from "node:url";

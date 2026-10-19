@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: FSL-1.1-ALv2
 import { spawnSync } from "node:child_process";
 import { X509Certificate } from "node:crypto";
 import { resolve } from "node:path";

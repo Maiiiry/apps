@@ -2,7 +2,7 @@
 
 Delcore owns shared personal and organization tenants, service authorization, usage accounting and tenant-wide billing. It runs a Connect API and durable background jobs in one Go process with PostgreSQL. It has no UI or separate SDK package.
 
-The [project index](../../docs/project-delcore.md), [server contract](../../docs/servers-delcore-api-contract.md) and [protocol contract](../../docs/protos-delcore-v1-contract.md) define the full behavior contract. Repository-owned code and distributions use AGPL-3.0-only.
+The [project index](../../docs/project-delcore.md), [server contract](../../docs/servers-delcore-api-contract.md) and [protocol contract](../../docs/protos-delcore-v1-contract.md) define the full behavior contract. Repository-owned code and distributions use FSL-1.1-ALv2.
 
 ## Operator prerequisites
 

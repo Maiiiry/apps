@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: AGPL-3.0-only
+# SPDX-License-Identifier: FSL-1.1-ALv2
 FROM golang:1.26.8-bookworm AS build
 WORKDIR /src
 COPY go.mod go.sum ./

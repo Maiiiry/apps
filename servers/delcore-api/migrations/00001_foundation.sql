@@ -1,4 +1,4 @@
--- SPDX-License-Identifier: AGPL-3.0-only
+-- SPDX-License-Identifier: FSL-1.1-ALv2
 CREATE TABLE users (
  id uuid PRIMARY KEY, issuer text NOT NULL, subject_hash text NOT NULL,
  email text NOT NULL, withdrawing_at timestamptz,
