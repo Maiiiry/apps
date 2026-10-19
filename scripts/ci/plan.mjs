@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 
 export function select(paths) {
   const shared = paths.some(
-    (path) => !/^(apps|servers|protos|docs)\//u.test(path),
+    (path) => !/^(apps|protos|examples|docs)\//u.test(path),
   );
   return {
     devbase:
@@ -24,10 +24,10 @@ export function select(paths) {
       paths.some((path) =>
         /^(apps\/delitools\/|docs\/.*delitools)/u.test(path),
       ),
-    delcore:
+    protocol:
       shared ||
       paths.some((path) =>
-        /^(servers\/delcore-api\/|protos\/|docs\/.*delcore)/u.test(path),
+        /^(protos\/|examples\/|docs\/.*delcore)/u.test(path),
       ),
   };
 }
