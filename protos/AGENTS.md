@@ -8,7 +8,7 @@
 
 - Follow root `AGENTS.md` and the owning project/domain contracts.
 
-- External contributors use apps-local contracts and checks. Maintainers with servers access handle private contract updates and server integration validation under the [repository boundary contract](../docs/repository-boundary-contract.md).
+- Use local contracts and checks. Update affected server contracts and run server integration validation in this checkout under the [repository boundary contract](../docs/repository-boundary-contract.md).
 - Write schemas and comments in English.
 - Keep all generated protobuf and Connect bindings under `protos/`, beside their owning schemas as defined in the protocol contracts. Run root `pnpm proto:generate` for all languages; generation must preserve schema and instruction files.
 - The private `@delino/protos` workspace owns TypeScript exports and their protobuf runtime dependency; applications consume these exports instead of generating app-local copies.
@@ -17,5 +17,5 @@
 
 - [project-delcore](../docs/project-delcore.md)
 - [protos-delcore-v1-contract](../docs/protos-delcore-v1-contract.md)
-- Private reference for maintainers with servers access; external contributors use the local protocol contract above: [servers-delcore-api-contract](https://github.com/delinoio/servers/blob/main/docs/servers-delcore-api-contract.md)
+- [servers-delcore-api-contract](../docs/servers-delcore-api-contract.md)
 - [Git Tracker protocol](../docs/protos-git-tracker-v1-contract.md)

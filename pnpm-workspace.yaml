@@ -2,6 +2,7 @@ packages:
   - apps/*
   - actions/*
   - packages/*
+  - servers/*
   - protos
 
 overrides:
