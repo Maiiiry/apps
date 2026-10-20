@@ -34,7 +34,10 @@ const locales = registry.locales.map((locale) => {
       [`${prefix}/services/`]: [
         {
           text: messages.services,
-          items: [{ text: messages.overview, link: `${prefix}/services/` }],
+          items: [
+            { text: messages.overview, link: `${prefix}/services/` },
+            { text: "Git Tracker", link: `${prefix}/services/git-tracker/` },
+          ],
         },
       ],
     },
