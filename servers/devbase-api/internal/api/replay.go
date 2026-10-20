@@ -46,6 +46,16 @@ func (s *Server) mutate(ctx context.Context, c *Call, op Op, who identity, msg, 
 		return e
 	}
 	if who.keyID != "" {
+		// Lock order is project, then key, then children, the same direction as DeleteProject
+		// and tenant cleanup. Taking the key lock first can deadlock with their cascade.
+		var project string
+		e := tx.QueryRow(ctx, "SELECT id::text FROM projects WHERE id=$1 FOR KEY SHARE", who.projectID).Scan(&project)
+		if errors.Is(e, pgx.ErrNoRows) {
+			return unauthenticated()
+		}
+		if e != nil {
+			return e
+		}
 		// A shared row lock makes revocation wait for in-flight work and makes later
 		// work observe a committed revocation.
 		k, e := s.loadKey(ctx, tx, who.keyID, " FOR SHARE OF k")
@@ -116,8 +126,8 @@ func (s *Server) mutate(ctx context.Context, c *Call, op Op, who identity, msg, 
 
 // scrubReplays removes stored responses for deleted data. Delete operations
 // carry no personal data and keep their record so a repeated delete stays idempotent.
-func scrubReplays(ctx context.Context, q Querier, where string, id string) error {
-	_, e := q.Exec(ctx, "UPDATE replays SET scrubbed=true,response=NULL,fingerprint='\\x'::bytea WHERE "+where+" AND NOT scrubbed AND operation NOT LIKE 'Delete%'", id)
+func scrubReplays(ctx context.Context, q Querier, where string, arg any) error {
+	_, e := q.Exec(ctx, "UPDATE replays SET scrubbed=true,response=NULL,fingerprint='\\x'::bytea WHERE "+where+" AND NOT scrubbed AND operation NOT LIKE 'Delete%'", arg)
 	return e
 }
 
@@ -129,4 +139,11 @@ func ScrubProject(ctx context.Context, q Querier, project string) error {
 // ScrubUser scrubs every replay record that refers to a deleted user.
 func ScrubUser(ctx context.Context, q Querier, user string) error {
 	return scrubReplays(ctx, q, "target_user_id=$1", user)
+}
+
+// ScrubProjects scrubs every replay record of the given projects, for tenant cleanup. It selects
+// by project ID so the update uses the replays_project index; the table has no tenant index,
+// and filtering by tenant would scan every replay record once per deleted tenant.
+func ScrubProjects(ctx context.Context, q Querier, projects []string) error {
+	return scrubReplays(ctx, q, "project_id=ANY($1::uuid[])", projects)
 }
