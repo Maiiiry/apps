@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { resolveBufEntry } from "./ci/buf-entry.mjs";
+import { resolveBufEntry } from "./buf-entry.mjs";
 
-const buf = resolveBufEntry(fileURLToPath(new URL("../", import.meta.url)));
+const buf = resolveBufEntry(fileURLToPath(new URL("../../", import.meta.url)));
 const revision = execFileSync(
   "git",
   ["rev-parse", "--verify", "--end-of-options", `${process.argv[2]}^{commit}`],
