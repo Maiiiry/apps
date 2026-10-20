@@ -4,6 +4,44 @@ Generated protobuf and Connect bindings under `protos/` (`*.pb.go`, `*.connect.g
 
 Root `pnpm dev` runs every workspace `dev` script concurrently through Turborepo. The `dev` task is persistent and uncached. The current participants are DeliDev, DeliTools, DevBase, Delino Site, Delino Docs, FixKey and Git Tracker frontends, plus the Delcore and Git Tracker Go APIs. Each retains its documented fixed loopback port and fails on conflicts. Stop the development session with `Ctrl+C`. App-local `pnpm dev` and `pnpm dev:desktop` remain available for individual frontend and native development. Each Go API also supports service-local `pnpm dev`. The server scripts run pinned Air `v1.67.4` through `go run`, without a global Air install. Each service configures Air with `root = "../.."` to watch shared files from the repository root. Build and run commands remain relative to the service workspace; no shell directory change is needed. Air rebuilds and restarts the owning server for Go or SQL changes in its service or `protos/`, and for root `go.mod` or `go.sum` changes. Each service uses a separate ignored `tmp/` directory and loads its optional service-local `.env`. Turborepo passes `DELCORE_CONFIG` to Delcore, `GIT_TRACKER_*` to Git Tracker, and `OTEL_*` and `NO_COLOR` to both API development tasks. Configure the existing database and provider requirements before starting; development does not provision databases, apply migrations or supply credentials. See the [Delcore server contract](servers-delcore-api-contract.md#local-development) and [Git Tracker server contract](servers-git-tracker-api-contract.md#local-development) for configuration. Each app-local `dev` and `dev:*` command and each Go API `dev` command injects the linked Infisical project's `dev` variables before startup. Install and authenticate the CLI and initialize the local root project configuration as described in the [environment contract](repository-environment-contract.md#local-development-injection). Root development delegates injection to each workspace task.
 
+## Named local development URLs
+
+The root pins Portless as a development dependency. Run `pnpm dev:portless` from the repository root to start all seven frontends through the existing Turbo `dev` task and register their local URLs. Root `portless.json` owns app names and upstream ports, including the Rspress documentation server. Run Portless from the root so it reads this configuration. App-local `pnpm dev` and native development commands retain their direct loopback addresses.
+
+| Application | Main-checkout URL               | Upstream          |
+| ----------- | ------------------------------- | ----------------- |
+| DeliDev     | `https://delidev.localhost`     | `127.0.0.1:46311` |
+| DeliTools   | `https://delitools.localhost`   | `127.0.0.1:46312` |
+| DevBase     | `https://devbase.localhost`     | `127.0.0.1:46313` |
+| Delino Site | `https://delino-site.localhost` | `127.0.0.1:46314` |
+| Delino Docs | `https://delino-docs.localhost` | `127.0.0.1:46315` |
+| FixKey      | `https://fixkey.localhost`      | `127.0.0.1:46316` |
+| Git Tracker | `https://git-tracker.localhost` | `127.0.0.1:46320` |
+
+Portless prefixes names with the branch in linked Git worktrees. Use the URLs printed at startup. Upstream ports remain fixed to preserve native shell development URLs and strict conflict handling; different worktrees cannot serve the same app concurrently on those ports.
+
+Before the first session, run `pnpm exec portless proxy start` from an interactive terminal. Portless defaults to HTTPS on port 443, creates a local certificate authority, and can request administrator access to trust it and bind the port. This setup is local to the machine and is not an install hook. Non-interactive sessions must use an already prepared proxy. For HTTP without certificate setup or a privileged port, run `pnpm exec portless proxy start --no-tls --port 1355`; subsequent app commands reuse that proxy configuration and print URLs such as `http://devbase.localhost:1355`.
+
+`Ctrl+C` stops the app session and removes its routes. The shared proxy remains available for other sessions. Inspect it with `pnpm exec portless list` or `pnpm exec portless doctor`; stop it with `pnpm exec portless proxy stop` when no session needs it. Portless keeps machine state outside the repository and can synchronize local host entries for browsers that need them. See the [upstream usage guide](https://github.com/vercel-labs/portless#readme) for trust and DNS troubleshooting. Go APIs retain their separate startup commands, origins and authentication configuration.
+
+### Git Tracker API configuration
+
+The Git Tracker frontend also needs an API URL with the proxy's scheme and an exact matching allowed web origin. The direct-loopback values in the app and server `.env.example` files apply to direct development, not the Portless URLs. An HTTPS page cannot call the HTTP loopback API, and an HTTP Portless page still needs its own allowed origin.
+
+After starting the proxy, register the separately started API's fixed loopback listener from the repository root:
+
+```sh
+pnpm exec portless alias git-tracker-api 46321
+```
+
+For the default HTTPS proxy in the main checkout, set `PUBLIC_GIT_TRACKER_API_URL=https://git-tracker-api.localhost` in the uncommitted `apps/git-tracker/.env.local`. Set `GIT_TRACKER_WEB_ORIGIN=https://git-tracker.localhost` in the API process environment, then start the API with its other required settings under the [server contract](servers-git-tracker-api-contract.md). Restart the frontend and API after changing their settings. Root `pnpm dev:portless` starts the frontend; it does not start the API or supply its credentials.
+
+In a linked worktree, set `GIT_TRACKER_WEB_ORIGIN` to the exact frontend origin printed by Portless, including its branch prefix. The explicit `git-tracker-api` alias has no automatic worktree prefix. With the HTTP proxy on port 1355, use `PUBLIC_GIT_TRACKER_API_URL=http://git-tracker-api.localhost:1355` and set `GIT_TRACKER_WEB_ORIGIN` to the printed `http://<frontend-host>:1355` origin. Include the scheme and any non-default proxy port, with no path or trailing slash. Register the frontend's `/callback` URL and sign-out origin in the development Logto application for the selected origin; authentication still requires its normal public application configuration.
+
+The API alias persists after the frontend session stops. Remove it with `pnpm exec portless alias --remove git-tracker-api` when finished. The alias and API listener are shared by these instructions; fixed upstream ports still permit only one local instance. Restore direct-loopback API and allowed-origin settings before returning to direct frontend development.
+
+## Validation
+
 The root `package.json` pins pnpm 12.14.0; the shared CI Node setup uses the same version and a version-specific store cache. Dependency overrides and build-script decisions are configured in `pnpm-workspace.yaml`, because pnpm 12 does not read the `pnpm` field in `package.json`.
 
 Install with `pnpm install --frozen-lockfile`. Run `pnpm test` in each app, root `cargo test`, and `go test ./...`. Generate frontend `dist` before Rust validation, then remove generated `dist` directories. Native builds, device launches, account-backed integration and store acceptance are separate checks. Preserve source revision, commands, results and unperformed checks in commits and CI artifacts.
