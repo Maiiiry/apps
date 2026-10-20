@@ -12,7 +12,7 @@ import {
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { collectNodeLicenses } from "./fixkey-node-licenses.mjs";
-const root = fileURLToPath(new URL("../..", import.meta.url));
+const root = fileURLToPath(new URL("../../../..", import.meta.url));
 const output = path.join(root, "apps/fixkey-app/src-tauri/gen/licenses");
 rmSync(output, { recursive: true, force: true });
 mkdirSync(output, { recursive: true });
