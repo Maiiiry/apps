@@ -43,6 +43,55 @@ jobs:
           RELEASE_TAG: ${{ github.event_name == 'push' && github.ref_name || inputs.tag }}
         run: node "scripts/release/project.mjs" validate-web
 
+  images:
+    needs: source
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        server: [delcore-api, devbase-api, git-tracker-api]
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ needs.source.outputs.revision }}
+          persist-credentials: false
+      - name: Sign in to GitHub Container Registry
+        env:
+          REGISTRY_USER: ${{ github.actor }}
+          REGISTRY_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: printf '%s' "$REGISTRY_TOKEN" | docker login ghcr.io --username "$REGISTRY_USER" --password-stdin
+      - name: Build and publish the immutable server image
+        env:
+          SERVER: ${{ matrix.server }}
+          VERSION: ${{ needs.source.outputs.version }}
+          REVISION: ${{ needs.source.outputs.revision }}
+          REPOSITORY: ${{ github.repository }}
+          OWNER: ${{ github.repository_owner }}
+        run: |
+          set -euo pipefail
+          image="ghcr.io/${OWNER}/${SERVER}:${VERSION}"
+          # A release tag never moves, so a retry reuses the published image.
+          if docker manifest inspect "$image" >/dev/null 2>&1; then
+            echo "Reusing the published image for this release"
+          else
+            docker build \
+              --file "servers/${SERVER}/Dockerfile" \
+              --label "org.opencontainers.image.source=https://github.com/${REPOSITORY}" \
+              --label "org.opencontainers.image.version=${VERSION}" \
+              --label "org.opencontainers.image.revision=${REVISION}" \
+              --label "org.opencontainers.image.licenses=FSL-1.1-ALv2" \
+              --tag "$image" .
+            docker push "$image"
+          fi
+          printf 'Image: %s\n' "$image" >> "$GITHUB_STEP_SUMMARY"
+      - name: Sign out of GitHub Container Registry
+        if: always()
+        run: docker logout ghcr.io
+
   deploy:
     needs: source
     runs-on: ubuntu-latest
@@ -52,10 +101,28 @@ jobs:
       matrix:
         include:
           - app: delino-site
+            environment: delino-site-production
+            concurrency_group: release-delino-site
             pages_project_variable: CLOUDFLARE_PAGES_PROJECT_SITE
           - app: delino-docs
+            environment: delino-site-production
+            concurrency_group: release-delino-docs
             pages_project_variable: CLOUDFLARE_PAGES_PROJECT_DOCS
-    environment: delino-site-production
+          # DevBase keeps its owning environment and the concurrency group of
+          # release-devbase.yml, so both workflows share one reviewer gate and
+          # never upload to the same Pages project at the same time.
+          - app: devbase
+            environment: devbase-production
+            concurrency_group: release-devbase
+            pages_project_variable: CLOUDFLARE_PAGES_PROJECT
+          - app: git-tracker
+            environment: delino-site-production
+            concurrency_group: release-git-tracker
+            pages_project_variable: CLOUDFLARE_PAGES_PROJECT_GIT_TRACKER
+    environment: ${{ matrix.environment }}
+    concurrency:
+      group: ${{ matrix.concurrency_group }}
+      cancel-in-progress: false
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
@@ -75,9 +142,13 @@ jobs:
           [[ "$CLOUDFLARE_PAGES_PROJECT" =~ ^[a-z0-9][a-z0-9-]{0,57}$ ]]
       - name: Install locked workspace
         run: pnpm install --frozen-lockfile --ignore-scripts
-      - name: Test and build the selected web application
+      - name: Build the selected web application
+        env:
+          # Public browser identifiers only; Git Tracker is the only consumer.
+          PUBLIC_LOGTO_ENDPOINT: ${{ vars.PUBLIC_LOGTO_ENDPOINT }}
+          PUBLIC_LOGTO_APP_ID: ${{ vars.PUBLIC_LOGTO_APP_ID }}
         working-directory: apps/${{ matrix.app }}
-        run: pnpm test
+        run: pnpm build
       - name: Include distribution notices
         run: cp "LICENSE" "NOTICE" "apps/${{ matrix.app }}/dist/"
       - name: Preserve the deployment candidate

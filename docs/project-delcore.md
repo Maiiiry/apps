@@ -17,7 +17,7 @@ The official API server base URL is `https://delcore.api.delino.io`.
 - `servers/scripts/dev-api.mjs`: shared Go API development launcher.
 - `protos/scripts/`: shared Buf entry resolution and protocol breaking checks.
 
-- `servers/delcore-api`: one Go API and background worker process, migrations and OCI packaging.
+- `servers/delcore-api`: one Go API and background worker process, migrations and OCI packaging. The `delino` release publishes its image; see the [workflow contract](repository-workflow-contract.md#server-image-publication).
 - `protos/delcore/v1`: Connect schemas, generated Go and TypeScript messages and Connect bindings.
 - `examples/delcore-client`: Go consumer example.
 

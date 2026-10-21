@@ -13,7 +13,7 @@ Track numeric measurements for Git commits and identify regressions without repo
 - `servers/scripts/dev-api.mjs`: shared Go API development launcher.
 - `protos/scripts/`: shared Buf entry resolution and protocol breaking checks.
 
-- `servers/git-tracker-api`: Go API, PostgreSQL persistence and background maintenance.
+- `servers/git-tracker-api`: Go API, PostgreSQL persistence, background maintenance and OCI packaging.
 - `apps/git-tracker`: Web application.
 - `actions/git-tracker`: Official GitHub Action.
 - `protos/package.json`: Internal `@delino/protos` workspace for generated TypeScript exports and runtime dependencies.

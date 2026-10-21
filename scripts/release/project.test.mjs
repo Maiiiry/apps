@@ -262,20 +262,47 @@ test("web workflows validate main ancestry before allocating protected deploymen
     assert.deepEqual(workflow.on.push.tags, [`${project}@v*`]);
     assert.equal(workflow.jobs.source.environment, undefined);
     const job = workflow.jobs.deploy;
-    assert.equal(job.needs, "source");
+    assert.deepEqual(job.needs, "source");
     if (project === Project.Delino) {
       assert.deepEqual(job.strategy.matrix.include, [
         {
           app: "delino-site",
+          environment: "delino-site-production",
+          concurrency_group: "release-delino-site",
           pages_project_variable: "CLOUDFLARE_PAGES_PROJECT_SITE",
         },
         {
           app: "delino-docs",
+          environment: "delino-site-production",
+          concurrency_group: "release-delino-docs",
           pages_project_variable: "CLOUDFLARE_PAGES_PROJECT_DOCS",
         },
+        {
+          app: "devbase",
+          environment: "devbase-production",
+          concurrency_group: "release-devbase",
+          pages_project_variable: "CLOUDFLARE_PAGES_PROJECT",
+        },
+        {
+          app: "git-tracker",
+          environment: "delino-site-production",
+          concurrency_group: "release-git-tracker",
+          pages_project_variable: "CLOUDFLARE_PAGES_PROJECT_GIT_TRACKER",
+        },
       ]);
+      assert.equal(job.environment, "${{ matrix.environment }}");
+      assert.deepEqual(job.concurrency, {
+        group: "${{ matrix.concurrency_group }}",
+        "cancel-in-progress": false,
+      });
+      // DevBase must share the owning workflow's gate and concurrency group.
+      const devbase = yaml.load(read(".github/workflows/release-devbase.yml"));
+      const owned = job.strategy.matrix.include.find(
+        (entry) => entry.app === "devbase",
+      );
+      assert.equal(owned.environment, devbase.jobs.deploy.environment);
+      assert.equal(owned.concurrency_group, devbase.concurrency.group);
       assert.equal(job.strategy["fail-fast"], false);
-      assert.equal(job.environment, "delino-site-production");
       const configuration = job.steps.find(
         (step) => step.name === "Validate deployment configuration",
       );
@@ -291,7 +318,9 @@ test("web workflows validate main ancestry before allocating protected deploymen
         /--project-name=\$\{\{ vars\[matrix\.pages_project_variable\] \}\}/u,
       );
       assert.equal(
-        job.steps.find((step) => step.run === "pnpm test")["working-directory"],
+        job.steps.find((step) => step.run === "pnpm build")[
+          "working-directory"
+        ],
         "apps/${{ matrix.app }}",
       );
     } else {
@@ -308,6 +337,28 @@ test("web workflows validate main ancestry before allocating protected deploymen
     assert.match(job.steps[deploy].with.command, /--branch=main/u);
     assert.equal(job.steps.at(-1).if, "always()");
   }
+});
+
+test("Delino releases publish server images with narrowly scoped package access", () => {
+  const workflow = yaml.load(read(".github/workflows/release-delino.yml"));
+  const { jobs } = workflow;
+  assert.equal(jobs.source.environment, undefined);
+  assert.equal(workflow.permissions.packages, undefined);
+  assert.deepEqual(jobs.images.permissions, {
+    contents: "read",
+    packages: "write",
+  });
+  assert.equal(jobs.images.needs, "source");
+  assert.equal(jobs.images.environment, undefined);
+  assert.deepEqual(jobs.images.strategy.matrix.server, [
+    "delcore-api",
+    "devbase-api",
+    "git-tracker-api",
+  ]);
+  assert.equal(
+    jobs.images.steps[0].with.ref,
+    "${{ needs.source.outputs.revision }}",
+  );
 });
 
 test("Delino preparation synchronizes both apps even when their versions differ", () => {
