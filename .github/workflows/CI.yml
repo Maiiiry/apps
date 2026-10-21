@@ -67,7 +67,7 @@ jobs:
         with:
           toolchain: nightly-2026-09-28
           components: rustfmt
-      - uses: actions/setup-go@v6
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         if: needs.changes.outputs.protocol == 'true' || needs.changes.outputs.delcore_api == 'true' || needs.changes.outputs.devbase_api == 'true' || needs.changes.outputs.git_tracker_api == 'true'
         with:
           go-version-file: go.mod
@@ -102,7 +102,7 @@ jobs:
         run: node scripts/ci/record-validation.mjs
       - name: Preserve validation evidence
         if: ${{ always() }}
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: validation-check-formatting-${{ github.run_attempt }}
           path: .ci-evidence/
@@ -125,7 +125,7 @@ jobs:
           lfs: true
       - uses: ./.github/actions/setup-ci-node
         id: node
-      - uses: actions/setup-go@v6
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           go-version-file: go.mod
       - id: dependencies
@@ -151,7 +151,7 @@ jobs:
         run: node scripts/ci/record-validation.mjs
       - name: Preserve validation evidence
         if: ${{ always() }}
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: validation-validate-${{ github.run_attempt }}
           path: .ci-evidence/
@@ -194,7 +194,7 @@ jobs:
         run: node scripts/ci/record-validation.mjs
       - name: Preserve validation evidence
         if: ${{ always() }}
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: validation-fixkey-frontend-${{ github.run_attempt }}
           path: .ci-evidence/
@@ -258,7 +258,7 @@ jobs:
         run: node scripts/ci/record-validation.mjs
       - name: Preserve validation evidence
         if: ${{ always() }}
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: validation-fixkey-desktop-${{ matrix.os }}-${{ github.run_attempt }}
           path: .ci-evidence/
@@ -302,7 +302,7 @@ jobs:
         run: node scripts/ci/record-validation.mjs
       - name: Preserve validation evidence
         if: ${{ always() }}
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: validation-delidev-frontend-${{ github.run_attempt }}
           path: .ci-evidence/
@@ -345,7 +345,7 @@ jobs:
         run: node scripts/ci/record-validation.mjs
       - name: Preserve validation evidence
         if: ${{ always() }}
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: validation-delitools-frontend-${{ github.run_attempt }}
           path: .ci-evidence/
@@ -369,7 +369,7 @@ jobs:
           lfs: true
       - uses: ./.github/actions/setup-ci-node
         id: node
-      - uses: actions/setup-go@v6
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           go-version-file: go.mod
       - id: dependencies
@@ -395,7 +395,7 @@ jobs:
         run: node scripts/ci/record-validation.mjs
       - name: Preserve validation evidence
         if: ${{ always() }}
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: validation-git-tracker-clients-${{ github.run_attempt }}
           path: .ci-evidence/
@@ -438,7 +438,7 @@ jobs:
         run: node scripts/ci/record-validation.mjs
       - name: Preserve validation evidence
         if: ${{ always() }}
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: validation-devbase-frontend-${{ github.run_attempt }}
           path: .ci-evidence/
@@ -481,7 +481,7 @@ jobs:
         run: node scripts/ci/record-validation.mjs
       - name: Preserve validation evidence
         if: ${{ always() }}
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: validation-delino-site-frontend-${{ github.run_attempt }}
           path: .ci-evidence/
@@ -524,7 +524,7 @@ jobs:
         run: node scripts/ci/record-validation.mjs
       - name: Preserve validation evidence
         if: ${{ always() }}
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: validation-delino-docs-frontend-${{ github.run_attempt }}
           path: .ci-evidence/
@@ -595,7 +595,7 @@ jobs:
         run: node scripts/ci/record-validation.mjs
       - name: Preserve validation evidence
         if: ${{ always() }}
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: validation-rust-clippy-${{ github.run_attempt }}
           path: .ci-evidence/
@@ -665,7 +665,7 @@ jobs:
         run: node scripts/ci/record-validation.mjs
       - name: Preserve validation evidence
         if: ${{ always() }}
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: validation-rust-test-${{ github.run_attempt }}
           path: .ci-evidence/
@@ -690,7 +690,7 @@ jobs:
           lfs: true
       - uses: ./.github/actions/setup-ci-node
         id: node
-      - uses: actions/setup-go@v6
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           go-version-file: go.mod
       - id: dependencies
@@ -735,7 +735,7 @@ jobs:
         run: node scripts/ci/record-validation.mjs
       - name: Preserve validation evidence
         if: ${{ always() }}
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: validation-delcore-api-${{ github.run_attempt }}
           path: .ci-evidence/
@@ -760,7 +760,7 @@ jobs:
           lfs: true
       - uses: ./.github/actions/setup-ci-node
         id: node
-      - uses: actions/setup-go@v6
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           go-version-file: go.mod
       - id: dependencies
@@ -805,7 +805,7 @@ jobs:
         run: node scripts/ci/record-validation.mjs
       - name: Preserve validation evidence
         if: ${{ always() }}
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: validation-devbase-api-${{ github.run_attempt }}
           path: .ci-evidence/
@@ -830,7 +830,7 @@ jobs:
           lfs: true
       - uses: ./.github/actions/setup-ci-node
         id: node
-      - uses: actions/setup-go@v6
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           go-version-file: go.mod
       - id: dependencies
@@ -874,7 +874,7 @@ jobs:
         run: node scripts/ci/record-validation.mjs
       - name: Preserve validation evidence
         if: ${{ always() }}
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: validation-git-tracker-api-${{ github.run_attempt }}
           path: .ci-evidence/
@@ -935,7 +935,7 @@ jobs:
           lfs: true
       - uses: ./.github/actions/setup-ci-node
         id: node
-      - uses: actions/setup-go@v6
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           go-version-file: go.mod
       - id: dependencies
@@ -968,7 +968,7 @@ jobs:
         run: node scripts/ci/record-validation.mjs
       - name: Preserve validation evidence
         if: ${{ always() }}
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: validation-protocol-${{ github.run_attempt }}
           path: .ci-evidence/

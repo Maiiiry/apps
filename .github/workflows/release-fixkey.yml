@@ -193,7 +193,7 @@ jobs:
             cargo run --locked -p fixkey --example verify_update -- "${signature%.sig}" "$signature"
           done
       - name: Preserve source-bound candidate and updater signatures
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: fixkey-${{ matrix.platform }}
           path: ${{ runner.temp }}/fixkey-assets/*
@@ -219,7 +219,7 @@ jobs:
       - uses: ./.github/actions/setup-ci-node
       - name: Install locked signature verifier dependencies
         run: pnpm install --frozen-lockfile --ignore-scripts
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           pattern: fixkey-*
           merge-multiple: true
