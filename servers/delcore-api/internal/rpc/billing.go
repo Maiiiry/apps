@@ -103,7 +103,7 @@ func (s *Server) ChangeSubscription(ctx context.Context, r *connect.Request[pb.C
 		}
 		var oldRank, newRank int
 		var free bool
-		if e = c.tx.QueryRow(c.ctx, "SELECT rank FROM plans WHERE id=$1", t.PlanId).Scan(&oldRank); e != nil {
+		if e = c.tx.QueryRow(c.ctx, "SELECT "+postgres.SelectedPlanRankSQL("t", "p")+" FROM tenants t JOIN plans p ON p.id=t.plan_id WHERE t.id=$1", q.TenantId).Scan(&oldRank); e != nil {
 			return e
 		}
 		if e = c.tx.QueryRow(c.ctx, "SELECT rank,free FROM plans WHERE id=$1", q.PlanId).Scan(&newRank, &free); e != nil {
@@ -119,6 +119,7 @@ func (s *Server) ChangeSubscription(ctx context.Context, r *connect.Request[pb.C
 		external := []string{}
 		seen := map[string]bool{}
 		newAddons := map[string]bool{}
+		requestedPrices := map[string][]string{q.PlanId: []string{}}
 		usageMeters := map[string]accounting.Decimal{}
 		addonRecurring := map[string]int{}
 		baseRecurring := 0
@@ -133,7 +134,7 @@ func (s *Server) ChangeSubscription(ctx context.Context, r *connect.Request[pb.C
 				return invalid("unknown price")
 			}
 			var current bool
-			if e = c.tx.QueryRow(c.ctx, `SELECT NOT EXISTS(SELECT 1 FROM prices newer JOIN prices selected ON selected.id=$1 WHERE newer.plan_id IS NOT DISTINCT FROM selected.plan_id AND newer.addon_id IS NOT DISTINCT FROM selected.addon_id AND newer.service_id=selected.service_id AND newer.meter=selected.meter AND newer.kind=selected.kind AND (newer.created_at,newer.id)>(selected.created_at,selected.id))`, priceID).Scan(&current); e != nil {
+			if e = c.tx.QueryRow(c.ctx, `SELECT CASE WHEN ce.id IS NOT NULL THEN ce.active_version_id=selected.id ELSE NOT EXISTS(SELECT 1 FROM prices newer WHERE newer.plan_id IS NOT DISTINCT FROM selected.plan_id AND newer.addon_id IS NOT DISTINCT FROM selected.addon_id AND newer.service_id=selected.service_id AND newer.meter=selected.meter AND newer.kind=selected.kind AND (newer.created_at,newer.id)>(selected.created_at,selected.id)) END FROM prices selected LEFT JOIN catalog_versions cv ON cv.id=selected.id LEFT JOIN catalog_entities ce ON ce.id=cv.entity_id WHERE selected.id=$1`, priceID).Scan(&current); e != nil {
 				return e
 			}
 			if !current {
@@ -144,6 +145,9 @@ func (s *Server) ChangeSubscription(ctx context.Context, r *connect.Request[pb.C
 			}
 			if addon != "" {
 				newAddons[addon] = true
+				requestedPrices[addon] = append(requestedPrices[addon], priceID)
+			} else {
+				requestedPrices[q.PlanId] = append(requestedPrices[q.PlanId], priceID)
 			}
 			if kind == 1 {
 				k := service + "\x00" + meter
@@ -175,6 +179,55 @@ func (s *Server) ChangeSubscription(ctx context.Context, r *connect.Request[pb.C
 			if addonRecurring[addon] != 1 {
 				return invalid("one recurring price is required for each add-on")
 			}
+		}
+		addonIDs := make([]string, 0, len(newAddons))
+		for addon := range newAddons {
+			addonIDs = append(addonIDs, addon)
+		}
+		versions, e := postgres.ActiveProductVersions(c.ctx, c.tx, q.PlanId, addonIDs)
+		if e != nil {
+			return e
+		}
+		productVersions := map[string]string{}
+		productVersions[q.PlanId], e = postgres.ActiveCatalogVersion(c.ctx, c.tx, "plan", q.PlanId)
+		if e != nil {
+			return e
+		}
+		for addon := range newAddons {
+			productVersions[addon], e = postgres.ActiveCatalogVersion(c.ctx, c.tx, "addon", addon)
+			if e != nil {
+				return e
+			}
+		}
+		for product, requested := range requestedPrices {
+			version := productVersions[product]
+			if version == "" {
+				continue
+			}
+			active, err := postgres.ProductVersionPrices(c.ctx, c.tx, product, version)
+			if err != nil {
+				return err
+			}
+			// Legacy price rows have no catalog version and may postdate the
+			// product snapshot, so compare both sets only by their catalog
+			// prices. Every catalog price in the active version must be selected.
+			var catalogRequested, catalogActive []string
+			if err := c.tx.QueryRow(c.ctx, "SELECT COALESCE(array_agg(id::text ORDER BY id::text),'{}') FROM catalog_versions WHERE id=ANY($1::uuid[])", requested).Scan(&catalogRequested); err != nil {
+				return err
+			}
+			if err := c.tx.QueryRow(c.ctx, "SELECT COALESCE(array_agg(id::text ORDER BY id::text),'{}') FROM catalog_versions WHERE id=ANY($1::uuid[])", active).Scan(&catalogActive); err != nil {
+				return err
+			}
+			if !slices.Equal(catalogRequested, catalogActive) {
+				return invalid("selected prices must match the active product version")
+			}
+		}
+		featureConflict, e := postgres.ConflictingFeature(c.ctx, c.tx, versions)
+		if e != nil {
+			return e
+		}
+		if featureConflict {
+			return invalid("base plan and add-on define the same feature")
 		}
 		oldAddons := map[string]bool{}
 		rows, e := c.tx.Query(c.ctx, "SELECT DISTINCT p.addon_id::text FROM entitlements en JOIN prices p ON p.id=en.price_id WHERE en.tenant_id=$1 AND en.ends_at IS NULL AND p.addon_id IS NOT NULL", q.TenantId)
@@ -232,7 +285,7 @@ func (s *Server) ChangeSubscription(ctx context.Context, r *connect.Request[pb.C
 				return precondition("use cancellation to return to the default free plan")
 			}
 			if newRank < oldRank {
-				o.JobId, e = c.job(q.TenantId, "subscription", "request:"+q.RequestKey, map[string]any{"plan_id": q.PlanId, "price_ids": q.PriceIds, "timing": "free_next_period"})
+				o.JobId, e = c.job(q.TenantId, "subscription", "request:"+q.RequestKey, map[string]any{"plan_id": q.PlanId, "price_ids": q.PriceIds, "version_ids": versions, "timing": "free_next_period"})
 				if e != nil {
 					return e
 				}
@@ -240,6 +293,9 @@ func (s *Server) ChangeSubscription(ctx context.Context, r *connect.Request[pb.C
 				return e
 			}
 			if _, e = c.tx.Exec(c.ctx, "UPDATE tenants SET plan_id=$2 WHERE id=$1", q.TenantId, q.PlanId); e != nil {
+				return e
+			}
+			if e = postgres.ReplaceTenantSelections(c.ctx, c.tx, q.TenantId, versions, c.now); e != nil {
 				return e
 			}
 			// An explicit free-plan price-version refresh has no fixed fee to
@@ -259,7 +315,7 @@ func (s *Server) ChangeSubscription(ctx context.Context, r *connect.Request[pb.C
 			if e = postgres.GrantAllowances(c.ctx, c.tx, q.TenantId, start, end, c.now, "free_refresh:"+q.RequestKey, previous); e != nil {
 				return e
 			}
-			o.JobId, e = c.job(q.TenantId, "subscription", "request:"+q.RequestKey, map[string]any{"plan_id": q.PlanId, "price_ids": q.PriceIds, "amount": "0"})
+			o.JobId, e = c.job(q.TenantId, "subscription", "request:"+q.RequestKey, map[string]any{"plan_id": q.PlanId, "price_ids": q.PriceIds, "version_ids": versions, "amount": "0"})
 			if e != nil {
 				return e
 			}
@@ -268,7 +324,7 @@ func (s *Server) ChangeSubscription(ctx context.Context, r *connect.Request[pb.C
 			}
 			return c.audit(q.TenantId, "subscription.free_refresh", "")
 		}
-		o.JobId, e = c.job(q.TenantId, "subscription", "request:"+q.RequestKey, map[string]any{"plan_id": q.PlanId, "price_ids": q.PriceIds, "external_price_ids": external, "timing": timing, "return_url": q.ReturnUrl})
+		o.JobId, e = c.job(q.TenantId, "subscription", "request:"+q.RequestKey, map[string]any{"plan_id": q.PlanId, "price_ids": q.PriceIds, "version_ids": versions, "external_price_ids": external, "timing": timing, "return_url": q.ReturnUrl})
 		return e
 	})
 }
