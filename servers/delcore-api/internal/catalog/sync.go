@@ -13,6 +13,7 @@ import (
 
 	pb "github.com/delinoio/apps/protos/delcore/v1"
 	"github.com/delinoio/apps/servers/delcore-api/internal/accounting"
+	"github.com/delinoio/apps/servers/delcore-api/internal/events"
 	"github.com/delinoio/apps/servers/delcore-api/internal/postgres"
 	"github.com/jackc/pgx/v5"
 	"go.yaml.in/yaml/v4"
@@ -371,11 +372,38 @@ func applyMeter(ctx context.Context, tx pgx.Tx, d definition, id, serviceID stri
 	if err != nil {
 		return err
 	}
+	// A meter without a version, or whose stored version has no event type
+	// because a name-only PutMeter registered it, is untyped and may still be
+	// typed under the in-use rule below.
+	untyped := previous == ""
+	if previous != "" {
+		var eventType string
+		if err = tx.QueryRow(ctx, "SELECT COALESCE(definition->>'event_type','') FROM catalog_versions WHERE id=$1", previous).Scan(&eventType); err != nil {
+			return err
+		}
+		untyped = eventType == ""
+	}
+	if untyped {
+		// An untyped meter registered through the operator API already
+		// evaluated events under the compatibility definition; only that
+		// definition may type it.
+		typed, err := events.CatalogDefinition(d.Key, d.EventType, aggregations[d.Aggregation], d.ValueAttribute, filters, groups)
+		if err != nil {
+			return err
+		}
+		used, err := events.UntypedMeterInUse(ctx, tx, id)
+		if err != nil {
+			return err
+		}
+		if used && !events.IsCompatibilityDefinition(typed) {
+			return errors.New("meter definition is immutable for its key")
+		}
+	}
 	version, _, err := postgres.SelectCatalogVersion(ctx, tx, id, definition)
 	if err != nil {
 		return err
 	}
-	if previous != "" && previous != version {
+	if previous != "" && previous != version && !untyped {
 		return errors.New("meter definition is immutable for its key")
 	}
 	var count int
