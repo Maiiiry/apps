@@ -31,11 +31,13 @@ func TestOCI(t *testing.T) {
 		}
 		return strings.TrimSpace(string(b))
 	}
-	mustFail := func(args ...string) {
+	mustFail := func(args ...string) string {
 		t.Helper()
-		if b, e := exec.Command("docker", args...).CombinedOutput(); e == nil {
+		b, e := exec.Command("docker", args...).CombinedOutput()
+		if e == nil {
 			t.Fatalf("expected failure: %s", b)
 		}
+		return string(b)
 	}
 	image := "delcore-api:validation"
 	if user := run("image", "inspect", "--format", "{{.Config.User}}", image); user != "65532:65532" {
@@ -110,6 +112,15 @@ func TestOCI(t *testing.T) {
 	mustFail(args...)
 	mustFail(append(args, "-migrate")...)
 	run("exec", name, "psql", "-U", "postgres", "-d", "delcore", "-c", "UPDATE delcore_schema SET version="+strconv.Itoa(migrations.Version)+" WHERE version=999")
+	// Development startup fails before serving without its catalog directory.
+	cfg["CATALOG_DIR"] = "/missing-catalog"
+	writeEnvironment()
+	// The rejection log carries the correlation ID of the failed reconciliation.
+	if rejected := mustFail(args...); !strings.Contains(rejected, "catalog synchronization rejected") || !strings.Contains(rejected, "correlation_id") {
+		t.Fatalf("catalog rejection log lacks its correlation ID: %s", rejected)
+	}
+	cfg["CATALOG_DIR"] = "/catalog"
+	writeEnvironment()
 	app := name + "-app"
 	run("run", "-d", "--name", app, "--network", "container:"+name, "--mount", mount, "--env-file", configPath, image)
 	t.Cleanup(func() { exec.Command("docker", "rm", "-f", app).Run() })
@@ -123,6 +134,9 @@ func TestOCI(t *testing.T) {
 	}
 	if !started {
 		t.Fatal("application did not start")
+	}
+	if logs := run("logs", app); !strings.Contains(logs, "catalog synchronized") || strings.Index(logs, "catalog synchronized") > strings.Index(logs, "delcore started") {
+		t.Fatal("development catalog was not applied before serving")
 	}
 	mustFail(args...) // The database lock rejects another instance.
 	// Force a process death after the mock provider accepts a charge but before

@@ -15,7 +15,11 @@ import (
 	"github.com/delinoio/apps/servers/delcore-api/internal/accounting"
 	"github.com/delinoio/apps/servers/delcore-api/internal/events"
 	"github.com/delinoio/apps/servers/delcore-api/internal/postgres"
+	"github.com/delinoio/apps/servers/delcore-api/internal/telemetry"
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
 	"go.yaml.in/yaml/v4"
 )
 
@@ -42,16 +46,91 @@ var valueTypes = map[string]int{
 }
 var featureKinds = map[string]int{"access": 1, "metered": 2, "configuration": 3}
 
+// Result summarizes one successful catalog application with counts only.
+type Result struct {
+	Files int
+	// Changed reports whether the application changed any catalog row.
+	Changed bool
+	// EntitiesCreated and VersionsCreated count new stable identities and new
+	// immutable versions; reused versions are not counted.
+	EntitiesCreated int
+	VersionsCreated int
+	// Correlation identifies the log line, span, and audit record of the application.
+	Correlation string
+}
+
+// catalogDigest fingerprints every catalog row that an application can write,
+// so an application that restores the declared state is distinguishable from
+// one that finds it unchanged. Development catalogs are small enough to hash.
+// Rows are hashed as ordered JSON arrays rather than delimiter-joined text, so
+// values that contain delimiters or are NULL cannot make distinct catalogs
+// collide.
+const catalogDigest = `SELECT md5(jsonb_build_array(
+ (SELECT jsonb_agg(jsonb_build_array(id,kind,scope,key,active_version_id) ORDER BY id) FROM catalog_entities),
+ (SELECT jsonb_agg(id ORDER BY id) FROM catalog_versions),
+ (SELECT jsonb_agg(jsonb_build_array(id,name,client_id,capabilities,scopes) ORDER BY id) FROM services),
+ (SELECT jsonb_agg(jsonb_build_array(id,name,rank,free,is_default,postpaid) ORDER BY id) FROM plans),
+ (SELECT jsonb_agg(jsonb_build_array(service_id,name) ORDER BY service_id,name) FROM meters),
+ (SELECT jsonb_agg(jsonb_build_array(id,service_id,name) ORDER BY id) FROM addons),
+ (SELECT jsonb_agg(jsonb_build_array(id,name) ORDER BY id) FROM features),
+ (SELECT jsonb_agg(id ORDER BY id) FROM prices),
+ (SELECT jsonb_agg(jsonb_build_array(product_id,feature_id,value) ORDER BY product_id,feature_id) FROM catalog_product_features))::text),
+ (SELECT count(*) FROM catalog_entities),(SELECT count(*) FROM catalog_versions)`
+
+type snapshot struct {
+	digest             string
+	entities, versions int
+}
+
+func capture(ctx context.Context, tx pgx.Tx) (snapshot, error) {
+	var s snapshot
+	err := tx.QueryRow(ctx, catalogDigest).Scan(&s.digest, &s.entities, &s.versions)
+	return s, err
+}
+
 // Sync applies a complete development file set under the already-acquired
 // process lock. The caller must check schema compatibility before calling it.
-func Sync(ctx context.Context, db *postgres.Store, dir string, logger *slog.Logger) error {
+// An application that changes catalog state appends one audit record
+// attributed to postgres.ActorCatalog with counts only, in the same
+// transaction. Metrics may be nil.
+func Sync(ctx context.Context, db *postgres.Store, dir string, logger *slog.Logger, metrics *telemetry.Metrics) (Result, error) {
+	started := time.Now()
+	ctx, span := telemetry.Tracer().Start(ctx, telemetry.SpanCatalogReconcile)
+	defer span.End()
+	correlation := uuid.Must(uuid.NewV7()).String()
+	span.SetAttributes(attribute.String("delcore.correlation_id", correlation))
+	result, err := apply(ctx, db, dir, correlation)
+	outcome := telemetry.OutcomeUnchanged
+	switch {
+	case err != nil:
+		outcome = telemetry.OutcomeRejected
+		span.SetStatus(codes.Error, "catalog_reconciliation")
+	case result.Changed:
+		outcome = telemetry.OutcomeApplied
+	}
+	metrics.CatalogApplied(outcome, time.Since(started))
+	span.SetAttributes(attribute.String("delcore.outcome", string(outcome)), attribute.Int("delcore.catalog.files", result.Files), attribute.Int("delcore.catalog.entities_created", result.EntitiesCreated), attribute.Int("delcore.catalog.versions_created", result.VersionsCreated))
+	if err != nil {
+		return result, err
+	}
+	logger.InfoContext(ctx, "catalog synchronized", "category", "catalog_reconciliation", "correlation_id", correlation, "outcome", string(outcome), "files", result.Files, "entities_created", result.EntitiesCreated, "versions_created", result.VersionsCreated)
+	return result, nil
+}
+
+func apply(ctx context.Context, db *postgres.Store, dir, correlation string) (Result, error) {
+	result := Result{Correlation: correlation}
 	items, err := load(dir)
 	if err != nil {
-		return err
+		return result, err
 	}
+	result.Files = len(items)
 	counts := map[string]int{}
 	err = db.Transaction(ctx, func(tx pgx.Tx) error {
-		if err := snapshotLegacyProducts(ctx, tx, items); err != nil {
+		before, err := capture(ctx, tx)
+		if err != nil {
+			return err
+		}
+		if err = snapshotLegacyProducts(ctx, tx, items); err != nil {
 			return err
 		}
 		if err := validateDatabase(ctx, tx, items); err != nil {
@@ -62,7 +141,7 @@ func Sync(ctx context.Context, db *postgres.Store, dir string, logger *slog.Logg
 				if item.Kind != kind {
 					continue
 				}
-				if err := apply(ctx, tx, item); err != nil {
+				if err := applyItem(ctx, tx, item); err != nil {
 					return fmt.Errorf("catalog file %s: %w", item.Path, err)
 				}
 				counts[kind]++
@@ -124,13 +203,24 @@ func Sync(ctx context.Context, db *postgres.Store, dir string, logger *slog.Logg
 				return err
 			}
 		}
-		return nil
+		after, err := capture(ctx, tx)
+		if err != nil {
+			return err
+		}
+		result.Changed = after.digest != before.digest
+		result.EntitiesCreated = after.entities - before.entities
+		result.VersionsCreated = after.versions - before.versions
+		if !result.Changed {
+			return nil
+		}
+		reason := fmt.Sprintf("files=%d services=%d meters=%d features=%d plans=%d addons=%d prices=%d entities_created=%d versions_created=%d", len(items), counts["service"], counts["meter"], counts["feature"], counts["plan"], counts["addon"], counts["price"], result.EntitiesCreated, result.VersionsCreated)
+		return postgres.Audit(ctx, tx, postgres.ActorCatalog, "", "catalog.reconcile", reason, correlation, time.Now().UTC())
 	})
 	if err != nil {
-		return err
+		// A rolled-back application reports no changes.
+		return Result{Files: result.Files, Correlation: correlation}, err
 	}
-	logger.InfoContext(ctx, "catalog synchronized", "category", "catalog_reconciliation", "files", len(items), "services", counts["service"], "meters", counts["meter"], "features", counts["feature"], "plans", counts["plan"], "addons", counts["addon"], "prices", counts["price"])
-	return nil
+	return result, nil
 }
 
 // snapshotLegacyProducts keeps tenants that predate catalog versioning on
@@ -277,7 +367,7 @@ func validateDatabase(ctx context.Context, tx pgx.Tx, items []definition) error 
 	return nil
 }
 
-func apply(ctx context.Context, tx pgx.Tx, d definition) error {
+func applyItem(ctx context.Context, tx pgx.Tx, d definition) error {
 	scope := ""
 	if d.Kind == "meter" || d.Kind == "feature" || d.Kind == "addon" {
 		var err error
@@ -338,26 +428,20 @@ func apply(ctx context.Context, tx pgx.Tx, d definition) error {
 func applyMeter(ctx context.Context, tx pgx.Tx, d definition, id, serviceID string) error {
 	filters := make([]*pb.MeterFilter, 0, len(d.Filters))
 	for _, item := range d.Filters {
-		values := make([]string, 0, len(item.Values))
-		for _, value := range item.Values {
-			values = append(values, value.Value)
+		filter := &pb.MeterFilter{Attribute: item.Attribute, Operator: operators[item.Operator]}
+		for _, node := range item.Values {
+			value, err := operand(node, item.Operator)
+			if err != nil {
+				return err
+			}
+			filter.TypedValues = append(filter.TypedValues, value)
 		}
-		// YAML presence checks take no values, but the server represents an
-		// existence filter with exactly one boolean value; store that form so the
-		// definition validates through PutMeter and the metering engine.
-		if item.Operator == "exists" && len(values) == 0 {
-			values = []string{"true"}
-		}
-		if item.Operator == "in" {
-			sort.Strings(values)
-		}
-		filters = append(filters, &pb.MeterFilter{Attribute: item.Attribute, Operator: operators[item.Operator], Values: values})
+		filters = append(filters, filter)
 	}
-	sort.Slice(filters, func(i, j int) bool {
-		a, _ := json.Marshal(filters[i])
-		b, _ := json.Marshal(filters[j])
-		return string(a) < string(b)
-	})
+	filters, err := events.CanonicalFilters(filters)
+	if err != nil {
+		return err
+	}
 	groups := append([]string(nil), d.GroupBy...)
 	sort.Strings(groups)
 	definition := struct {

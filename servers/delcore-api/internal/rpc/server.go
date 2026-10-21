@@ -19,6 +19,7 @@ import (
 	"github.com/delinoio/apps/servers/delcore-api/internal/auth"
 	"github.com/delinoio/apps/servers/delcore-api/internal/config"
 	"github.com/delinoio/apps/servers/delcore-api/internal/postgres"
+	"github.com/delinoio/apps/servers/delcore-api/internal/telemetry"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -32,6 +33,8 @@ type Server struct {
 	Config config.Config
 	Log    *slog.Logger
 	Now    func() time.Time
+	// Metrics is optional; nil records no counters.
+	Metrics *telemetry.Metrics
 }
 type call struct {
 	ctx                               context.Context
@@ -60,6 +63,10 @@ func canonical(s string) bool {
 func (s *Server) Handler() (string, http.Handler) {
 	return delcorev1connect.NewDelcoreServiceHandler(s, connect.WithReadMaxBytes(int(s.Config.MaxPayloadBytes)))
 }
+
+// correlationHeader carries the correlation ID of every response and error.
+const correlationHeader = "X-Delcore-Correlation-Id"
+
 func run[Q any, R any](s *Server, ctx context.Context, req *connect.Request[Q], out *R, fn func(*call) error) (*connect.Response[R], error) {
 	correlation := ID()
 	id, e := s.Auth.Verify(ctx, req.Header().Get("Authorization"))
@@ -191,7 +198,7 @@ func run[Q any, R any](s *Server, ctx context.Context, req *connect.Request[Q], 
 	}
 	reflect.ValueOf(out).Elem().FieldByName("Metadata").Set(reflect.ValueOf(&pb.Metadata{CorrelationId: correlation}))
 	resp := connect.NewResponse(out)
-	resp.Header().Set("X-Delcore-Correlation-Id", correlation)
+	resp.Header().Set(correlationHeader, correlation)
 	return resp, nil
 }
 
@@ -238,7 +245,7 @@ func detailed(ce *connect.Error, reason pb.ErrorReason, id string) error {
 	if e == nil {
 		ce.AddDetail(d)
 	}
-	ce.Meta().Set("X-Delcore-Correlation-Id", id)
+	ce.Meta().Set(correlationHeader, id)
 	return ce
 }
 func (c *call) operator(reason string) error {

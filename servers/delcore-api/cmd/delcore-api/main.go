@@ -20,6 +20,7 @@ import (
 	"github.com/delinoio/apps/servers/delcore-api/internal/postgres"
 	"github.com/delinoio/apps/servers/delcore-api/internal/provider"
 	"github.com/delinoio/apps/servers/delcore-api/internal/rpc"
+	"github.com/delinoio/apps/servers/delcore-api/internal/telemetry"
 	"github.com/delinoio/apps/servers/delcore-api/internal/worker"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -69,16 +70,8 @@ func execute() error {
 		return e
 	}
 	defer func() { lock.Conn().Close(context.Background()); lock.Release() }()
-	if c.Development {
-		if e = catalog.Sync(ctx, db, c.CatalogDir, logger); e != nil {
-			logger.Error("catalog synchronization rejected", "category", "catalog_reconciliation", "error", e.Error())
-			return e
-		}
-	}
-	verifier, e := auth.New(ctx, c)
-	if e != nil {
-		return e
-	}
+	// Tracing and metrics start before catalog application so the startup
+	// reconciliation is observable.
 	tp := trace.NewTracerProvider()
 	if os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT") != "" || os.Getenv("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT") != "" {
 		exporter, e := otlptracehttp.New(ctx)
@@ -89,9 +82,24 @@ func execute() error {
 	}
 	otel.SetTracerProvider(tp)
 	defer tp.Shutdown(context.Background())
-	s := &rpc.Server{DB: db, Auth: verifier, Config: c, Log: logger}
-	w := &worker.Worker{DB: db, Provider: provider.New(c), Config: c, Log: logger}
 	registry := prometheus.NewRegistry()
+	metrics := telemetry.New(registry)
+	if c.Development {
+		// The result carries the correlation ID of the reconciliation span even
+		// when the application is rejected, so the only startup failure log can be
+		// matched with its trace.
+		reconciled, e := catalog.Sync(ctx, db, c.CatalogDir, logger, metrics)
+		if e != nil {
+			logger.Error("catalog synchronization rejected", "category", "catalog_reconciliation", "correlation_id", reconciled.Correlation, "error", e.Error())
+			return e
+		}
+	}
+	verifier, e := auth.New(ctx, c)
+	if e != nil {
+		return e
+	}
+	s := &rpc.Server{DB: db, Auth: verifier, Config: c, Log: logger, Metrics: metrics}
+	w := &worker.Worker{DB: db, Provider: provider.New(c), Config: c, Log: logger, Metrics: metrics}
 	backlog := prometheus.NewGauge(prometheus.GaugeOpts{Name: "delcore_job_backlog", Help: "Pending or reconciliation jobs."})
 	failed := prometheus.NewGauge(prometheus.GaugeOpts{Name: "delcore_failed_jobs", Help: "Jobs requiring operator attention."})
 	mismatch := prometheus.NewGauge(prometheus.GaugeOpts{Name: "delcore_provider_mismatches", Help: "Provider payments requiring attribution review."})
