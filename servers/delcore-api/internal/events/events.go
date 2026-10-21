@@ -64,6 +64,8 @@ const (
 	MaxAttributeNameBytes  = 100
 	MaxAttributeValueBytes = 1024
 	MaxNumberBytes         = 64
+	// MaxGroupAttributes bounds the group-by fields of one meter definition.
+	MaxGroupAttributes = 20
 )
 
 // GroupDigest returns the SHA-256 digest of a canonical group key. Admission
@@ -313,6 +315,10 @@ type storedMeter struct {
 
 // CompatibilityAttribute is the value attribute of CompatibilityDefinition.
 const CompatibilityAttribute = "quantity"
+
+// CompatibilityAggregation is the wire aggregation of CompatibilityDefinition,
+// which queries report for a meter without a typed definition.
+const CompatibilityAggregation = pb.MeterAggregation_METER_AGGREGATION_SUM
 
 // CompatibilityDefinition is the catalog compatibility rule for a meter that
 // was registered without a typed definition, such as an operator PutMeter call
