@@ -43,8 +43,6 @@ test("ordinary CI preserves affected-only dispatch and Linux allocation", () => 
     ["delitools-frontend", "delitools"],
     ["protocol", "protocol"],
     ["delcore-api", "delcore_api"],
-    ["devbase-api", "devbase_api"],
-    ["git-tracker-api", "git_tracker_api"],
     ["fixkey-frontend", "fixkey"],
   ]) {
     assert.equal(
@@ -172,25 +170,23 @@ test("write-capable remote cache credentials stay in trusted main jobs", () => {
 test("all CI formatting checks belong to Check Formatting", () => {
   const job = workflow.jobs["check-formatting"];
   assert.equal(job.name, "Check Formatting");
-  assert.equal(job.needs, "changes");
-  assert.equal(job.env.TURBO_SCM_BASE, "${{ needs.changes.outputs.base }}");
-  assert.equal(job.env.TURBO_SCM_HEAD, "${{ needs.changes.outputs.head }}");
-  const commands = new Map(
-    job.steps.filter((step) => step.run).map((step) => [step.run, step]),
-  );
-  assert.ok(commands.has("pnpm format:check"));
-  assert.equal(
-    commands.get("cargo fmt --all --check").if,
-    "needs.changes.outputs.rust_clippy != '[]'",
-  );
+  assert.equal(job.needs, undefined);
+  assert.equal(job.env, undefined);
+  for (const step of job.steps) {
+    assert.doesNotMatch(step.if ?? "", /needs\.changes/u);
+  }
+  const commands = new Set(job.steps.map((step) => step.run?.trim()));
   for (const command of [
+    "pnpm format:check --all",
+    "cargo fmt --all --check",
+    "cargo fmt --manifest-path servers/Cargo.toml --all --check",
     "node scripts/ci/check-go-format.mjs protos examples",
+    "node scripts/ci/check-go-format.mjs servers",
     "pnpm exec buf format --diff --exit-code",
   ])
-    assert.equal(
-      commands.get(command).if,
-      "needs.changes.outputs.protocol == 'true'",
-    );
+    assert.ok(commands.has(command), command);
+  assert.equal(workflow.jobs.changes.outputs.devbase_api, undefined);
+  assert.equal(workflow.jobs.changes.outputs.git_tracker_api, undefined);
   for (const [id, config] of Object.entries(workflow.jobs)) {
     if (id === "check-formatting") continue;
     for (const step of config.steps)
@@ -214,8 +210,8 @@ test("validation evidence and main-only cache saves survive the job split", () =
     "check-formatting",
     "git-tracker-clients",
     "delcore-api",
-    "devbase-api",
-    "git-tracker-api",
+    "rust-servers",
+    "rust-servers-clippy",
     "devbase-frontend",
     "delino-site-frontend",
     "delino-docs-frontend",
@@ -257,6 +253,7 @@ test("result aggregation rejects every selected failed, canceled or skipped job"
     workflow.jobs["ci-result"].needs.map((id) => [id, { result: "success" }]),
   );
   needs.changes.outputs = {
+    rust_servers: '[{"service":"devbase-api"},{"service":"git-tracker-api"}]',
     rust_clippy: '["fixkey-core"]',
     rust_test: '["fixkey-core", "fixkey"]',
     git_tracker: "true",
@@ -272,6 +269,13 @@ test("result aggregation rejects every selected failed, canceled or skipped job"
     protocol: "true",
   };
   assert.equal(run(needs).status, 0);
+  const noServers = structuredClone(needs);
+  noServers.changes.outputs.rust_servers = "[]";
+  noServers["rust-servers"].result = "skipped";
+  noServers["rust-servers-clippy"].result = "skipped";
+  assert.equal(run(noServers).status, 0);
+  noServers["rust-servers"].result = "success";
+  assert.notEqual(run(noServers).status, 0);
   for (const id of Object.keys(needs)) {
     for (const result of ["failure", "cancelled", "skipped"]) {
       const changed = structuredClone(needs);
@@ -280,6 +284,7 @@ test("result aggregation rejects every selected failed, canceled or skipped job"
     }
   }
   needs.changes.outputs = {
+    rust_servers: '[{"service":"devbase-api"},{"service":"git-tracker-api"}]',
     rust_clippy: "[]",
     rust_test: "[]",
     git_tracker: "false",
@@ -376,14 +381,15 @@ test("every prerequisite failure retains its command and outcome in evidence", (
   }
 });
 
-test("server validation uses local protocols, PostgreSQL and licensed OCI packaging", () => {
-  for (const id of ["delcore-api", "devbase-api", "git-tracker-api"]) {
+test("server validation uses local protocols and PostgreSQL without OCI checks", () => {
+  for (const id of ["delcore-api", "rust-servers"]) {
     const job = workflow.jobs[id];
     assert.equal(job["runs-on"], "ubuntu-latest");
     assert.ok(workflow.jobs["ci-result"].needs.includes(id));
     const commands = job.steps.map((step) => step.run ?? "").join("\n");
-    assert.match(commands, /go vet \.\/servers\//u);
+    if (id === "delcore-api") assert.match(commands, /go vet \.\/servers\//u);
     assert.match(commands, /docker run.*postgres:17/u);
+    assert.doesNotMatch(commands, /ci:oci|docker build/u);
     assert.doesNotMatch(commands, /go get|client:setup|delinoio\/servers/u);
   }
   for (const service of ["delcore-api", "devbase-api"]) {
@@ -402,11 +408,75 @@ test("Rust API jobs install Clippy for the repository-selected toolchain", () =>
     new URL("../../rust-toolchain", import.meta.url),
     "utf8",
   ).trim();
-  for (const id of ["devbase-api", "git-tracker-api"]) {
+  for (const id of ["rust-servers-clippy"]) {
     const setup = workflow.jobs[id].steps.find((step) =>
       step.uses?.startsWith("dtolnay/rust-toolchain@"),
     );
     assert.equal(setup.with.toolchain, toolchain, id);
     assert.ok(setup.with.components.split(/,\s*/u).includes("clippy"), id);
   }
+});
+
+test("Rust server matrix gates allocation and preserves independent evidence", () => {
+  const job = workflow.jobs["rust-servers"];
+  assert.equal(job.if, "needs.changes.outputs.rust_servers != '[]'");
+  assert.equal(job.needs, "changes");
+  assert.equal(job.env.TEST_DATABASE_URL, undefined);
+  assert.ok(
+    job.steps
+      .find((step) => step.id === "integration")
+      .env.TEST_DATABASE_URL.includes("matrix.port"),
+  );
+  assert.equal(job.strategy["fail-fast"], false);
+  assert.equal(
+    job.strategy.matrix.include,
+    "${{ fromJSON(needs.changes.outputs.rust_servers) }}",
+  );
+  assert.equal(
+    workflow.jobs.changes.outputs.rust_servers,
+    "${{ steps.plan.outputs.rust_servers }}",
+  );
+  const record = job.steps.find((step) => step.name === "Record validation");
+  assert.equal(record.env.VALIDATION_JOB, "rust-servers");
+  assert.equal(record.env.VALIDATION_MATRIX, "${{ toJSON(matrix) }}");
+  assert.match(
+    job.steps.find((step) => step.name === "Preserve validation evidence").with
+      .name,
+    /matrix.service/u,
+  );
+  const commands = job.steps.map((step) => step.run ?? "").join("\n");
+  assert.doesNotMatch(commands, /cargo clippy/u);
+  assert.match(commands, /cargo test.*--test postgres -- --ignored/u);
+  assert.doesNotMatch(commands, /\bgo (?:vet|build|test)\b/u);
+  assert.ok(
+    !job.steps.some((step) => step.uses?.startsWith("actions/setup-go@")),
+  );
+  assert.equal(job.env.GOWORK, undefined);
+  assert.ok(!workflow.jobs["devbase-api"]);
+  assert.ok(!workflow.jobs["git-tracker-api"]);
+});
+
+test("Rust server Clippy runs independently with the affected-service matrix", () => {
+  const job = workflow.jobs["rust-servers-clippy"];
+  assert.equal(job.needs, "changes");
+  assert.equal(job.if, workflow.jobs["rust-servers"].if);
+  assert.deepEqual(job.strategy, workflow.jobs["rust-servers"].strategy);
+  assert.ok(workflow.jobs["ci-result"].needs.includes("rust-servers-clippy"));
+  const commands = job.steps.map((step) => step.run ?? "").join("\n");
+  assert.match(
+    commands,
+    /cargo clippy.*-p "\$SERVICE".*--all-targets -- -D warnings/u,
+  );
+  assert.doesNotMatch(commands, /cargo test|docker|\bgo (?:vet|build|test)\b/u);
+  assert.ok(
+    !job.steps.some((step) => step.uses?.startsWith("actions/setup-go@")),
+  );
+  const record = job.steps.find((step) => step.name === "Record validation");
+  assert.equal(record.env.VALIDATION_JOB, "rust-servers-clippy");
+  assert.equal(record.env.VALIDATION_MATRIX, "${{ toJSON(matrix) }}");
+  assert.match(
+    job.steps.find((step) => step.name === "Preserve validation evidence").with
+      .name,
+    /validation-rust-servers-clippy-.*matrix.service/u,
+  );
 });
