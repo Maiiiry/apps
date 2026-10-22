@@ -122,3 +122,25 @@ test("Cargo lockfiles preserve cargo-mono global-impact handling", () => {
     rust_test: ["core", "app"],
   });
 });
+
+test("instruction documents do not force workspace Rust validation", () => {
+  const paths = [
+    "AGENTS.md",
+    "scripts/ci/AGENTS.md",
+    ".github/actions/setup-ci-node/AGENTS.md",
+    ".cargo/AGENTS.md",
+    "crates/fixkey-core/AGENTS.md",
+  ];
+  assert.deepEqual(planner(paths, [], []), {
+    rust_clippy: [],
+    rust_test: [],
+  });
+  assert.deepEqual(
+    planner([...paths, "crates/core/src/lib.rs"], ["core"], ["app", "core"]),
+    { rust_clippy: ["core"], rust_test: ["app", "core"] },
+  );
+  assert.deepEqual(planner([...paths, "scripts/ci/plan.mjs"], [], []), {
+    rust_clippy: ["core", "app"],
+    rust_test: ["core", "app"],
+  });
+});

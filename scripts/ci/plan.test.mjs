@@ -152,11 +152,10 @@ for (const [service, key] of [
     }
   });
 }
-test("server-wide license, instructions and helpers select every server", () => {
+test("server-wide license and helpers select every server", () => {
   for (const path of [
     "servers/LICENSE",
     "servers/scripts/dev-api.mjs",
-    "servers/AGENTS.md",
     "servers/NOTICE",
   ]) {
     const selection = select([path]);
@@ -292,5 +291,33 @@ test("Rust server matrix selects only affected services", () => {
       selectRustServers(select(paths)).map(({ service }) => service),
       expected,
     );
+  }
+});
+
+test("instruction documents do not select project validation", () => {
+  const paths = [
+    "AGENTS.md",
+    "servers/AGENTS.md",
+    "servers/delcore-api/AGENTS.md",
+    "servers/crates/server-common/AGENTS.md",
+    "apps/fixkey-app/AGENTS.md",
+    "crates/fixkey-core/AGENTS.md",
+    "packages/ui/AGENTS.md",
+    "scripts/ci/AGENTS.md",
+    ".github/actions/setup-ci-node/AGENTS.md",
+    "protos/AGENTS.md",
+  ];
+  for (const path of paths) {
+    assert.deepEqual(select([path]), select([]), path);
+    assert.deepEqual(selectRustServers(select([path])), [], path);
+  }
+  assert.deepEqual(select(paths), select([]));
+  for (const source of [
+    "servers/devbase-api/src/main.rs",
+    "apps/delitools/src/main.tsx",
+    "scripts/ci/plan.mjs",
+    "pnpm-workspace.yaml",
+  ]) {
+    assert.deepEqual(select([...paths, source]), select([source]), source);
   }
 });

@@ -24,10 +24,12 @@ export function selectRust(
   const global =
     direct.merge_base !== base ||
     affected.merge_base !== base ||
-    paths.some((path) =>
-      /^(\.github\/workflows\/CI\.yml$|\.github\/actions\/setup-ci-node\/|scripts\/ci\/|\.cargo\/|rust-toolchain(?:\.toml)?$|prebuilt-dependencies\.lock\.json$)/u.test(
-        path,
-      ),
+    paths.some(
+      (path) =>
+        !/(?:^|\/)AGENTS\.md$/u.test(path) &&
+        /^(\.github\/workflows\/CI\.yml$|\.github\/actions\/setup-ci-node\/|scripts\/ci\/|\.cargo\/|rust-toolchain(?:\.toml)?$|prebuilt-dependencies\.lock\.json$)/u.test(
+          path,
+        ),
     );
   const all = global ? run("list").packages.map((pkg) => pkg.name) : null;
   return {

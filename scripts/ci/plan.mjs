@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { lockfilePaths } from "./lockfile-paths.mjs";
 
 export function select(paths, { baseLockfile, headLockfile } = {}) {
+  paths = paths.filter((path) => !/(?:^|\/)AGENTS\.md$/u.test(path));
   if (paths.includes("pnpm-lock.yaml")) {
     const affected = lockfilePaths(baseLockfile, headLockfile);
     // Unknown ownership must retain global validation instead of skipping jobs.
