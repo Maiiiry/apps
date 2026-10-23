@@ -24,6 +24,27 @@ fn valid_job(id: &str) -> bool {
     uuid::Uuid::parse_str(id).is_ok_and(|v| v.get_version_num() == 7)
 }
 
+/// Key of the provider object that holds when a subscription's latest confirmed payment
+/// happened. `provider_transactions` is keyed by tenant and a tenant can replace its external
+/// subscription, so the payment watermark that resolves a stale failure is kept per subscription.
+fn paid_key(subscription: &str) -> String {
+    format!("paid:{subscription}")
+}
+
+/// Records a confirmed payment of `subscription` at `paid_at`, keeping the latest occurrence.
+pub(super) async fn record_subscription_payment(
+    conn: &mut PgConnection,
+    subscription: &str,
+    paid_at: DateTime<Utc>,
+) -> Result<()> {
+    sqlx::query("INSERT INTO provider_objects VALUES($1,$2,'paid') ON CONFLICT(external_id) DO UPDATE SET occurred_at=EXCLUDED.occurred_at WHERE provider_objects.occurred_at<EXCLUDED.occurred_at")
+        .bind(paid_key(subscription))
+        .bind(paid_at)
+        .execute(&mut *conn)
+        .await?;
+    Ok(())
+}
+
 impl Worker {
     /// Persist a verified provider notification before acknowledging it.
     pub async fn ingest_webhook(&self, signature: &str, raw: &[u8]) -> axum::http::StatusCode {
@@ -86,7 +107,25 @@ impl Worker {
                 if t.origin == "subscription_recurring"
                     && let Some(period) = &t.billing_period
                 {
-                    sqlx::query("UPDATE tenants SET renewal_failed=true WHERE external_subscription_id=$1 AND external_customer_id=$2 AND period_end<=$3 AND NOT EXISTS(SELECT 1 FROM provider_transactions WHERE external_id=$4)").bind(&t.subscription_id).bind(&t.customer_id).bind(period.starts_at).bind(&t.id).execute(&mut *tx).await?;
+                    let marked = sqlx::query("UPDATE tenants SET renewal_failed=true WHERE external_subscription_id=$1 AND external_customer_id=$2 AND period_end<=$3 AND NOT EXISTS(SELECT 1 FROM provider_transactions WHERE external_id=$4)").bind(&t.subscription_id).bind(&t.customer_id).bind(period.starts_at).bind(&t.id).execute(&mut *tx).await?.rows_affected();
+                    // A failure for a subscription that no tenant carries yet (its initial payment
+                    // is still unreconciled) is retained like an unassociated past-due status, so
+                    // the older initial payment sees it when it establishes the association. A
+                    // failure that matched no row of an associated tenant does not apply to it
+                    // (covered period or another customer) and is not retained.
+                    let unassociated = marked == 0
+                        && !t.subscription_id.is_empty()
+                        && !sqlx::query_scalar::<_, bool>(
+                            "SELECT EXISTS(SELECT 1 FROM tenants WHERE external_subscription_id=$1)",
+                        )
+                        .bind(&t.subscription_id)
+                        .fetch_one(&mut *tx)
+                        .await?;
+                    if marked > 0 || unassociated {
+                        // Keep the occurrence so an older renewal payment delivered later cannot clear it.
+                        self.retain_subscription_failure(&mut tx, &t.subscription_id, &event)
+                            .await?;
+                    }
                 } else if valid_job(&t.custom.job_id) {
                     sqlx::query("UPDATE jobs SET state='failed',error_category='payment_failed',updated_at=now() WHERE id=$1::text::uuid AND tenant_id::text=$2 AND state<>'done'").bind(&t.custom.job_id).bind(&t.custom.tenant_id).execute(&mut *tx).await?;
                     let changed = sqlx::query("UPDATE tenants SET auto_suspended=true WHERE id::text=$1 AND EXISTS(SELECT 1 FROM jobs WHERE id=$2::text::uuid AND kind='auto_topup' AND state='failed')").bind(&t.custom.tenant_id).bind(&t.custom.job_id).execute(&mut *tx).await?.rows_affected();
@@ -141,7 +180,10 @@ impl Worker {
                 item.price.product_id != self.config.paddle_credit_product_id
                     || item.price.custom.job_id.is_empty()
             });
-            return self.renew(conn, &t, at).await;
+            // Order the renewal by when the provider billed it, like the initial payment, so a
+            // reconciled payment is not compared with newer failures by its processing time.
+            let paid_at = t.confirmed_at(at);
+            return self.renew(conn, &t, paid_at).await;
         }
         if !valid_job(&t.custom.job_id) {
             return Ok(());
@@ -256,6 +298,7 @@ impl Worker {
                     previous.as_ref(),
                 )
                 .await?;
+                record_subscription_payment(conn, &t.subscription_id, at).await?;
                 self.apply_retained_subscription_state(conn, &tenant, &t.subscription_id, at)
                     .await?;
             }
@@ -292,8 +335,30 @@ impl Worker {
                 .fetch_optional(&mut *conn)
                 .await?;
         if previous.is_some_and(|p| event.occurred_at <= p) {
-            if tenant.is_none() && v.status == "past_due" {
-                self.retain_subscription_failure(conn, &v.id, event).await?;
+            if v.status == "past_due" {
+                match &tenant {
+                    None => self.retain_subscription_failure(conn, &v.id, event).await?,
+                    Some(tenant) => {
+                        // A later informational status leaves this watermark newer than the
+                        // failure, which only a confirmed payment of this subscription at or
+                        // after it can resolve. Payments of a replaced subscription of the
+                        // same tenant never resolve it.
+                        let paid_since: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM provider_objects WHERE external_id=$1 AND occurred_at>=$2)")
+                            .bind(paid_key(&v.id))
+                            .bind(event.occurred_at)
+                            .fetch_one(&mut *conn)
+                            .await?;
+                        if !paid_since {
+                            sqlx::query(
+                                "UPDATE tenants SET renewal_failed=true WHERE id=$1::text::uuid",
+                            )
+                            .bind(tenant)
+                            .execute(&mut *conn)
+                            .await?;
+                            self.retain_subscription_failure(conn, &v.id, event).await?;
+                        }
+                    }
+                }
             }
             return Ok(());
         }
@@ -311,6 +376,8 @@ impl Worker {
                     .bind(&tenant)
                     .execute(&mut *conn)
                     .await?;
+                // Keep the occurrence so an older renewal payment delivered later cannot clear it.
+                self.retain_subscription_failure(conn, &v.id, event).await?;
             }
             "canceled" => self.activate_free(conn, &tenant, event.occurred_at).await?,
             _ => {}
@@ -477,6 +544,9 @@ impl Worker {
             ),
             None => (None, String::new()),
         };
+        // A failure applied to the tenant stays unresolved, so a recurring payment that occurred
+        // before it but is delivered after the association cannot clear it.
+        let mut keep_failure = false;
         if state == "canceled" && occurred.is_some_and(|at| at > paid_at) {
             tracing::warn!(
                 tenant_id = tenant,
@@ -496,13 +566,16 @@ impl Worker {
                 .bind(tenant)
                 .execute(&mut *conn)
                 .await?;
+            keep_failure = failed.is_some();
         }
         // The payment becomes the ordering watermark; the tenant now carries any retained failure.
         sqlx::query("INSERT INTO provider_objects VALUES($1,$2,'active') ON CONFLICT(external_id) DO UPDATE SET occurred_at=EXCLUDED.occurred_at,state='active' WHERE provider_objects.occurred_at<EXCLUDED.occurred_at").bind(subscription).bind(paid_at).execute(&mut *conn).await?;
-        sqlx::query("DELETE FROM provider_objects WHERE external_id=$1")
-            .bind(format!("failure:{subscription}"))
-            .execute(&mut *conn)
-            .await?;
+        if !keep_failure {
+            sqlx::query("DELETE FROM provider_objects WHERE external_id=$1")
+                .bind(format!("failure:{subscription}"))
+                .execute(&mut *conn)
+                .await?;
+        }
         Ok(())
     }
 }

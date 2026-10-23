@@ -14,6 +14,7 @@ pub mod billing_domain;
 pub mod billing_safeguards;
 pub mod catalog;
 pub mod free_allowance;
+pub mod late_renewal;
 pub mod metering;
 pub mod rank_downgrade;
 pub mod subscription_cancellation;
