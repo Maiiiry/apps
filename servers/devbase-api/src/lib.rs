@@ -54,6 +54,29 @@ impl Op {
             Self::DeleteEndUser => "DeleteEndUser",
         }
     }
+    /// Resolves an exact DevBase RPC path to its operation. Any other path, including near
+    /// misses, returns `None` so request-controlled text never becomes a metric label.
+    pub fn from_procedure_path(path: &str) -> Option<Self> {
+        let op = match path.strip_prefix("/devbase.v1.DevBaseService/")? {
+            "CreateProject" => Self::CreateProject,
+            "GetProject" => Self::GetProject,
+            "ListProjects" => Self::ListProjects,
+            "UpdateProject" => Self::UpdateProject,
+            "DeleteProject" => Self::DeleteProject,
+            "IssueApiKey" => Self::IssueApiKey,
+            "GetApiKey" => Self::GetApiKey,
+            "ListApiKeys" => Self::ListApiKeys,
+            "RevokeApiKey" => Self::RevokeApiKey,
+            "CreateEndUser" => Self::CreateEndUser,
+            "GetEndUser" => Self::GetEndUser,
+            "LookupEndUser" => Self::LookupEndUser,
+            "ListEndUsers" => Self::ListEndUsers,
+            "UpdateEndUser" => Self::UpdateEndUser,
+            "DeleteEndUser" => Self::DeleteEndUser,
+            _ => return None,
+        };
+        Some(op)
+    }
     pub fn mutation(self) -> bool {
         matches!(
             self,
@@ -127,27 +150,37 @@ impl Server {
             .get("authorization")
             .and_then(|v| v.to_str().ok())
             .unwrap_or("");
+        let accounting = ctx
+            .extensions()
+            .get::<server_common::http::Accounting>()
+            .cloned();
         let result = tokio::time::timeout(
             self.config.request_timeout,
             self.execute::<Q, R>(authorization, op, q, &trace),
         )
         .await
         .unwrap_or_else(|_| Err(Fault::unavailable()));
-        self.metrics
-            .requests
-            .with_label_values(&[
-                op.name(),
-                result
-                    .as_ref()
-                    .err()
-                    .map(|f| f.code.as_str())
-                    .unwrap_or("ok"),
-            ])
-            .inc();
-        self.metrics
-            .duration
-            .with_label_values(&[op.name()])
-            .observe(start.elapsed().as_secs_f64());
+        let code = result
+            .as_ref()
+            .err()
+            .map(|f| f.code.as_str())
+            .unwrap_or("ok");
+        match accounting {
+            // Behind the HTTP middleware the response that is returned decides the recorded
+            // outcome (see `server_common::http::Accounting`), so the handler only reports.
+            Some(marker) => marker.report(code, start.elapsed()),
+            // Without the middleware the handler is the only party that can record.
+            None => {
+                self.metrics
+                    .requests
+                    .with_label_values(&[op.name(), code])
+                    .inc();
+                self.metrics
+                    .duration
+                    .with_label_values(&[op.name()])
+                    .observe(start.elapsed().as_secs_f64());
+            }
+        }
         tracing::info!(trace_id=%trace,procedure=op.name(),duration_ms=start.elapsed().as_millis(),success=result.is_ok(),"request completed");
         match result {
             Ok(mut value) => {
