@@ -11,6 +11,11 @@ pub struct Identity {
     pub tenant: String,
     pub project: String,
     pub key: Option<uuid::Uuid>,
+    /// Set for a login-token mutation whose malformed target matched an existing replay record of
+    /// the same caller: the request is a routing conflict (`already_exists`). `tenant` and
+    /// `project` then hold the verified recorded values, so the caller can still be rate limited
+    /// before the conflict is returned.
+    pub routing_conflict: bool,
 }
 pub fn parse_key(raw: &str) -> Result<(uuid::Uuid, String)> {
     let rest = raw
@@ -59,6 +64,37 @@ pub async fn usable(
     Ok(row)
 }
 impl Server {
+    /// Routing-only lookup of the caller's own unexpired replay record by caller and idempotency
+    /// key alone, reading only the recorded tenant and project IDs. The caller validates the key
+    /// first.
+    ///
+    /// The lookup takes the same transaction-scoped advisory lock on the caller and key as a
+    /// mutation, so a valid request with this key that is still executing finishes first: its
+    /// replay row is then visible (or it rolled back and there is none) before the record is
+    /// treated as absent.
+    async fn replay_route(
+        &self,
+        identity: &str,
+        q: &Value,
+    ) -> Result<Option<(uuid::Uuid, Option<uuid::Uuid>)>> {
+        let principal = format!("user:{identity}");
+        let key = string(q, "idempotencyKey");
+        let mut tx = self.db.begin().await?;
+        sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))")
+            .bind(format!("{principal}|{key}"))
+            .execute(&mut *tx)
+            .await?;
+        let route = sqlx::query_as(
+            "SELECT tenant_id,project_id FROM replays WHERE principal=$1 AND idempotency_key=$2 AND expires_at>$3",
+        )
+        .bind(&principal)
+        .bind(key)
+        .bind(now())
+        .fetch_optional(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        Ok(route)
+    }
     pub async fn authenticate(&self, authorization: &str, op: Op, q: &Value) -> Result<Identity> {
         let parts: Vec<_> = authorization.split_whitespace().collect();
         if parts.len() != 2 || !parts[0].eq_ignore_ascii_case("Bearer") {
@@ -71,10 +107,16 @@ impl Server {
         } else {
             project
         };
-        if !server_common::canonical_id(target) {
+        let canonical = server_common::canonical_id(target);
+        let key_auth = parts[1].starts_with("dbk_");
+        // A login-token mutation with a malformed target is decided after the replay lookup,
+        // because only the idempotency key is validated before it: an existing record makes the
+        // target a different tenant or project (`already_exists`), no record makes it invalid.
+        let defer_target = !canonical && op.mutation() && !key_auth;
+        if !canonical && !defer_target {
             return Err(Fault::invalid("target must be a canonical UUID v7"));
         }
-        if parts[1].starts_with("dbk_") {
+        if key_auth {
             let (id, secret) = parse_key(parts[1])?;
             let mut db = self.db.acquire().await?;
             let row = usable(&mut db, id, false).await?;
@@ -101,11 +143,23 @@ impl Server {
                 tenant,
                 project: project.into(),
                 key: Some(id),
+                routing_conflict: false,
             });
         }
         let authorization = format!("Bearer {}", parts[1]);
         let mut user = None;
-        let tenant = if !requested_tenant.is_empty() {
+        // The verified project of the matching replay record when the target was deferred.
+        let mut recorded_project = None;
+        let tenant = if defer_target {
+            let identity = self.authority.identify(&authorization).await?;
+            crate::validation::validate_routing(op, q)?;
+            let Some((recorded, project)) = self.replay_route(&identity, q).await? else {
+                return Err(Fault::invalid("target must be a canonical UUID v7"));
+            };
+            user = Some(identity);
+            recorded_project = project;
+            recorded.to_string()
+        } else if !requested_tenant.is_empty() {
             requested_tenant.to_owned()
         } else {
             let found: Option<uuid::Uuid> =
@@ -120,7 +174,14 @@ impl Server {
                     if !op.mutation() {
                         return Err(Fault::missing());
                     }
-                    let t:uuid::Uuid=sqlx::query_scalar("SELECT tenant_id FROM replays WHERE principal=$1 AND idempotency_key=$2 AND expires_at>$3").bind(format!("user:{identity}")).bind(string(q,"idempotencyKey")).bind(now()).fetch_optional(&self.db).await?.ok_or_else(Fault::missing)?;
+                    // The routing-only lookup is keyed by the idempotency key, so a malformed key is
+                    // rejected as `invalid_argument` before any replay storage access. Authentication
+                    // above still wins, and the caller validates the key again for found projects.
+                    crate::validation::validate_routing(op, q)?;
+                    let (t, _) = self
+                        .replay_route(&identity, q)
+                        .await?
+                        .ok_or_else(Fault::missing)?;
                     user = Some(identity);
                     t.to_string()
                 }
@@ -153,11 +214,27 @@ impl Server {
         {
             return Err(Fault::denied());
         }
+        if defer_target {
+            // The caller is authorized for the recorded tenant; the malformed target cannot match
+            // the record, so the replay comparison would end in a conflict whatever the payload.
+            // The conflict is returned by the caller after rate limiting, which is keyed by the
+            // verified recorded tenant and project instead of the malformed target.
+            return Ok(Identity {
+                actor: format!("user:{user}"),
+                tenant,
+                project: recorded_project
+                    .map(|id| id.to_string())
+                    .unwrap_or_default(),
+                key: None,
+                routing_conflict: true,
+            });
+        }
         Ok(Identity {
             actor: format!("user:{user}"),
             tenant,
             project: project.into(),
             key: None,
+            routing_conflict: false,
         })
     }
 }

@@ -243,18 +243,13 @@ async fn timeout_after_the_handler_finished_records_the_returned_timeout_once() 
     // client receives the 504, so the one recorded observation is the timeout, not the earlier
     // handler outcome, and its latency spans the whole request.
     let fx = fixture(Duration::from_millis(200), Delcore::Fail).await;
-    let rpc = connectrpc::Router::new()
-        .add_service(fx.server.clone())
-        .into_axum_service();
-    let slow = Router::new()
-        .fallback_service(rpc)
-        .layer(axum::middleware::from_fn(
-            |request: axum::extract::Request, next: axum::middleware::Next| async move {
-                let response = next.run(request).await;
-                tokio::time::sleep(Duration::from_millis(600)).await;
-                response
-            },
-        ));
+    let slow = devbase_api::http::rpc_router(fx.server.clone()).layer(axum::middleware::from_fn(
+        |request: axum::extract::Request, next: axum::middleware::Next| async move {
+            let response = next.run(request).await;
+            tokio::time::sleep(Duration::from_millis(600)).await;
+            response
+        },
+    ));
     let app = Router::new()
         .fallback_service(slow)
         .layer(axum::middleware::from_fn_with_state(
@@ -382,6 +377,49 @@ async fn malformed_oversized_messages_get_the_typed_size_rejection_before_decodi
     assert!(reply.head.starts_with("HTTP/1.1 400"), "{}", reply.head);
     assert!(reply.header("x-devbase-trace-id").is_none());
     assert_eq!(count(&fx.server, "GetProject", "invalid_argument"), 3);
+}
+
+#[tokio::test]
+async fn oversized_messages_are_rejected_before_authentication_and_storage() {
+    // The pool never connects, so any authentication or storage access would surface as
+    // `unauthenticated` or `unavailable` instead of the typed size rejection.
+    let fx = fixture(Duration::from_secs(5), Delcore::Fail).await;
+    let path = format!("{PREFIX}GetProject");
+    let prefix = format!(r#"{{"projectId":"{PROJECT}""#);
+    // One byte above the 64 KiB application limit and well below the 256 KiB transport limit.
+    let padding = " ".repeat((64 << 10) + 1 - prefix.len() - 1);
+    let body = format!("{prefix}{padding}}}");
+    assert_eq!(body.len(), (64 << 10) + 1);
+    let well_formed_key = format!(
+        "dbk_{}_{}",
+        "0190000000007000800000000000000a",
+        "A".repeat(43)
+    );
+    for authorization in [
+        String::new(),
+        "Authorization: Bearer login-token\r\n".to_owned(),
+        format!("Authorization: Bearer {well_formed_key}\r\n"),
+    ] {
+        let reply = exchange(
+            fx.addr,
+            &rpc_head(&path, body.len(), &authorization),
+            &[(Duration::ZERO, body.as_bytes())],
+        )
+        .await;
+        assert!(
+            reply.head.starts_with("HTTP/1.1 400"),
+            "{authorization:?}: {}",
+            reply.head
+        );
+        // The reply may use chunked framing, so take the JSON object out of the raw body.
+        let json = &reply.body[reply.body.find('{').unwrap()..=reply.body.rfind('}').unwrap()];
+        let body: serde_json::Value = serde_json::from_str(json).unwrap();
+        assert_eq!(body["code"], "invalid_argument", "{authorization:?}");
+        assert_eq!(body["message"], "request exceeds 64 KiB");
+    }
+    assert_eq!(count(&fx.server, "GetProject", "invalid_argument"), 3);
+    assert_eq!(count(&fx.server, "GetProject", "unauthenticated"), 0);
+    assert_eq!(count(&fx.server, "GetProject", "unavailable"), 0);
 }
 
 #[tokio::test]
