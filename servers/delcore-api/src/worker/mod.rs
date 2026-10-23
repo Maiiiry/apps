@@ -39,6 +39,19 @@ struct Job {
     attempts: i64,
     payload: Value,
 }
+impl Job {
+    fn from_row(row: &sqlx::postgres::PgRow) -> Result<Self> {
+        Ok(Self {
+            id: row.try_get("id")?,
+            tenant: row.try_get("tenant")?,
+            kind: row.try_get("kind")?,
+            state: row.try_get("state")?,
+            attempts: i64::from(row.try_get::<i32, _>("attempts")?),
+            external_id: row.try_get("external_id")?,
+            payload: row.try_get("payload")?,
+        })
+    }
+}
 #[derive(Default, Deserialize)]
 #[serde(default)]
 struct Payload {
@@ -46,6 +59,19 @@ struct Payload {
     return_url: String,
     external_price_ids: Vec<String>,
     timing: String,
+}
+/// Phase marker kept in `jobs.error_category` while a cancellation is `running`.
+///
+/// A deleting tenant's cancellation waits for a final check before it may contact the provider, so
+/// a running cancellation is in one of two phases. Claiming a pending cancellation records
+/// `NOT_SENT`; the worker overwrites it with `STARTED` immediately before the provider request.
+/// Every other write to the job (`finish`) replaces the marker with a real category. Recovery
+/// trusts only these markers, so any interruption before the request (lock-wait timeout, shutdown
+/// dropping the step, a crash) returns the job to pending, while anything that may have reached
+/// the provider is reconciled. Reconciliation claims never get a marker: they only read.
+mod cancel_phase {
+    pub const NOT_SENT: &str = "request_not_sent";
+    pub const STARTED: &str = "request_started";
 }
 pub(super) fn uid(s: &str) -> Result<uuid::Uuid> {
     Ok(uuid::Uuid::parse_str(s)?)
@@ -61,7 +87,10 @@ impl Worker {
         })
     }
     pub async fn recover(&self) -> Result<()> {
-        sqlx::query("UPDATE jobs SET state=CASE WHEN kind IN ('email','webhook','metering') THEN 'pending' ELSE 'reconcile' END,available_at=now(),updated_at=now() WHERE state='running'").execute(&self.pool).await?;
+        // A running cancellation still marked as not sent never reached the provider, even if its
+        // step was dropped by shutdown or the process died: rerun its final check instead of
+        // reconciling a request that was never made, and refund the attempt the claim counted.
+        sqlx::query("UPDATE jobs SET state=CASE WHEN kind IN ('email','webhook','metering') OR (kind='cancel' AND error_category=$1) THEN 'pending' ELSE 'reconcile' END,attempts=CASE WHEN kind='cancel' AND error_category=$1 THEN greatest(attempts-1,0) ELSE attempts END,error_category=CASE WHEN kind='cancel' AND error_category=$1 THEN 'final_settlement_pending' ELSE error_category END,available_at=now(),updated_at=now() WHERE state='running'").bind(cancel_phase::NOT_SENT).execute(&self.pool).await?;
         Ok(())
     }
     pub async fn run(&self, mut shutdown: tokio::sync::watch::Receiver<bool>) -> Result<()> {
@@ -93,31 +122,77 @@ impl Worker {
         self.recover().await?;
         self.maintain(Utc::now()).await?;
         self.process_metering(metering::METERING_BATCH).await?;
+        let Some(j) = self.claim_next().await? else {
+            return Ok(());
+        };
+        self.run_claimed(&j).await
+    }
+    /// Claims the next ready non-metering job and marks it running. A claimed pending cancellation
+    /// also records that no provider request was sent (see `cancel_phase`).
+    async fn claim_next(&self) -> Result<Option<Job>> {
         let mut tx = postgres::begin(&self.pool).await?;
         let row=sqlx::query("SELECT id::text,COALESCE(tenant_id::text,'') AS tenant,kind,state,attempts,external_id,payload FROM jobs WHERE state IN ('pending','reconcile') AND kind<>'metering' AND available_at<=now() ORDER BY available_at,id LIMIT 1 FOR UPDATE SKIP LOCKED").fetch_optional(&mut *tx).await?;
-        let Some(row) = row else { return Ok(()) };
-        let j = Job {
-            id: row.try_get("id")?,
-            tenant: row.try_get("tenant")?,
-            kind: row.try_get("kind")?,
-            state: row.try_get("state")?,
-            attempts: i64::from(row.try_get::<i32, _>("attempts")?),
-            external_id: row.try_get("external_id")?,
-            payload: row.try_get("payload")?,
+        let Some(row) = row else {
+            // End the read transaction now instead of leaving it open until the connection is reused.
+            tx.commit().await?;
+            return Ok(None);
         };
+        let j = Job::from_row(&row)?;
         sqlx::query(
-            "UPDATE jobs SET state='running',attempts=attempts+1,updated_at=now() WHERE id=$1",
+            "UPDATE jobs SET state='running',attempts=attempts+1,error_category=CASE WHEN kind='cancel' AND state='pending' THEN $2 ELSE error_category END,updated_at=now() WHERE id=$1",
         )
         .bind(uid(&j.id)?)
+        .bind(cancel_phase::NOT_SENT)
         .execute(&mut *tx)
         .await?;
         tx.commit().await?;
+        Ok(Some(j))
+    }
+    /// Claims the next ready job exactly as `step` does and returns its id without running it, for
+    /// integration tests that interrupt a claimed job before its body finishes.
+    #[doc(hidden)]
+    pub async fn claim_next_job(&self) -> Result<Option<uuid::Uuid>> {
+        self.claim_next().await?.map(|j| uid(&j.id)).transpose()
+    }
+    /// Runs the already claimed job with the given id, for integration tests that must hold
+    /// the state-transition lock between the claim and the job body. `step` cannot do that
+    /// because every phase before the job body takes the same lock.
+    #[doc(hidden)]
+    pub async fn run_running_job(&self, id: uuid::Uuid) -> Result<()> {
+        let row=sqlx::query("SELECT id::text,COALESCE(tenant_id::text,'') AS tenant,kind,state,attempts,external_id,payload FROM jobs WHERE id=$1 AND state='running'").bind(id).fetch_one(&self.pool).await?;
+        let mut j = Job::from_row(&row)?;
+        // The claim recorded the state the job was claimed from; tests claim pending work.
+        j.state = "pending".into();
+        self.run_claimed(&j).await
+    }
+    async fn run_claimed(&self, j: &Job) -> Result<()> {
+        let request_started = std::sync::atomic::AtomicBool::new(false);
         // Finishing is outside the timed request so an ambiguous outcome stays durable.
-        match tokio::time::timeout(self.config.timeout(), self.execute_job(&j)).await {
+        match tokio::time::timeout(self.config.timeout(), self.execute_job(j, &request_started))
+            .await
+        {
             Ok(result) => result,
+            // A deleting tenant's cancellation first waits on the state-transition lock for its
+            // final check. Timing out there happens before any provider request, so the outcome
+            // is not ambiguous: keep the cancellation pending, refund the attempt (see `finish`)
+            // and rerun the check on the next pass instead of reconciling a request never sent.
+            // Shutdown and crashes in the same phase are handled by `recover` through the
+            // durable `cancel_phase` marker; this branch only covers the in-process timeout.
+            Err(_)
+                if j.kind == "cancel"
+                    && j.state != "reconcile"
+                    && !request_started.load(std::sync::atomic::Ordering::SeqCst) =>
+            {
+                tracing::warn!(
+                    kind = j.kind,
+                    "cancellation timed out before any provider request"
+                );
+                self.finish(j, "pending", "final_settlement_pending", "")
+                    .await
+            }
             Err(_) => {
                 self.retry(
-                    &j,
+                    j,
                     if matches!(j.kind.as_str(), "webhook" | "email") {
                         Error::Transient
                     } else {
@@ -129,7 +204,38 @@ impl Worker {
             }
         }
     }
-    async fn execute_job(&self, j: &Job) -> Result<()> {
+    /// Reports whether the subscription cancellation of a deleting tenant must keep waiting.
+    ///
+    /// While deleting, accepted metering work (pending, deferred, failed or running) must be rated
+    /// and settled before the subscription is canceled; otherwise recovered usage would produce
+    /// postpaid debt that has no subscription left to collect it.
+    ///
+    /// The check takes the same transaction lock as event acceptance and reads the clock only after
+    /// holding it. A reporting request admitted before this check commits its metering job first,
+    /// so the check sees it. A request that waits for this transaction takes its own timestamp
+    /// afterwards (see `Server::execute`), finds the grace period ended and is rejected. The
+    /// provider request that follows stays outside the lock. Public so integration tests can
+    /// exercise the lock ordering directly.
+    pub async fn deleting_cancellation_waits(&self, tenant: uuid::Uuid) -> Result<bool> {
+        let grace = self.config.reporting_grace_seconds;
+        tokio::time::timeout(self.config.timeout(), async {
+            let mut tx = postgres::begin(&self.pool).await?;
+            let cutoff = Utc::now() - Duration::seconds(grace);
+            let waiting: bool = sqlx::query_scalar("SELECT deleting_at IS NOT NULL AND (deleting_at>$2 OR COALESCE((SELECT sum(amount) FROM ledger WHERE tenant_id=t.id AND kind IN ('postpaid','settlement')),0)<>0 OR EXISTS(SELECT 1 FROM jobs WHERE tenant_id=t.id AND kind='settlement' AND state<>'done') OR EXISTS(SELECT 1 FROM jobs WHERE tenant_id=t.id AND kind='metering' AND state<>'done')) FROM tenants t WHERE id=$1")
+                .bind(tenant)
+                .bind(cutoff)
+                .fetch_one(&mut *tx)
+                .await?;
+            tx.commit().await?;
+            Ok::<_, anyhow::Error>(waiting)
+        })
+        .await?
+    }
+    async fn execute_job(
+        &self,
+        j: &Job,
+        request_started: &std::sync::atomic::AtomicBool,
+    ) -> Result<()> {
         if j.kind == "webhook" {
             let Some(event) = j.payload.get("event_id").and_then(Value::as_str) else {
                 return self.finish(j, "failed", "invalid_payload", "").await;
@@ -247,7 +353,7 @@ impl Worker {
                 }
             }
             "cancel" => {
-                let waiting:bool=sqlx::query_scalar("SELECT deleting_at IS NOT NULL AND (deleting_at>$2 OR COALESCE((SELECT sum(amount) FROM ledger WHERE tenant_id=t.id AND kind IN ('postpaid','settlement')),0)<>0 OR EXISTS(SELECT 1 FROM jobs WHERE tenant_id=t.id AND kind='settlement' AND state<>'done')) FROM tenants t WHERE id=$1").bind(uid(&j.tenant)?).bind(Utc::now()-Duration::seconds(self.config.reporting_grace_seconds)).fetch_one(&self.pool).await?;
+                let waiting = self.deleting_cancellation_waits(uid(&j.tenant)?).await?;
                 if waiting {
                     return self
                         .finish(j, "pending", "final_settlement_pending", "")
@@ -264,6 +370,17 @@ impl Worker {
             }
             _ => return self.finish(j, "failed", "unknown_job_kind", "").await,
         }
+        if j.kind == "cancel" {
+            // Persist the phase change first: an interruption after this write may hide a request
+            // the provider accepted, so recovery must reconcile instead of resending.
+            sqlx::query("UPDATE jobs SET error_category=$2 WHERE id=$1 AND state='running'")
+                .bind(uid(&j.id)?)
+                .bind(cancel_phase::STARTED)
+                .execute(&self.pool)
+                .await?;
+        }
+        // From here on a timeout may hide a request the provider already accepted.
+        request_started.store(true, std::sync::atomic::Ordering::SeqCst);
         let raw = match self.provider.request(method, &path, body).await {
             Ok(v) => v,
             Err(e) => return self.retry(j, e, false).await,

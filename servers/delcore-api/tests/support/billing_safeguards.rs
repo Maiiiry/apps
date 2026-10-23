@@ -176,3 +176,456 @@ async fn free_postpaid_plans_are_rejected_without_catalog_or_audit_changes() {
         .unwrap();
     assert_eq!(count, 1);
 }
+
+/// Starts a counting provider mock and returns a worker bound to it, so cancellation tests assert
+/// on the provider requests actually sent instead of reaching the sandbox URL from `.env.example`.
+async fn mock_worker(
+    f: &Fixture,
+    timeout_seconds: i64,
+) -> (
+    delcore_api::worker::Worker,
+    std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+    tokio::task::JoinHandle<()>,
+) {
+    let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let recorded = seen.clone();
+    let app = axum::Router::new().fallback(move |uri: axum::http::Uri| {
+        let recorded = recorded.clone();
+        async move {
+            let mut paths = recorded.lock().unwrap();
+            paths.push(uri.path().to_string());
+            // Like the provider, report a scheduled cancellation once a cancel request arrived.
+            let scheduled = paths.iter().any(|path| path.ends_with("/cancel"));
+            let change = if scheduled {
+                json!({"action":"cancel"})
+            } else {
+                serde_json::Value::Null
+            };
+            axum::Json(
+                json!({"data":{"id":"sub_fixture","status":"active","scheduled_change":change}}),
+            )
+        }
+    });
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let task = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let worker = delcore_api::worker::Worker::new(
+        f.db.clone(),
+        delcore_api::config::Config {
+            paddle_url: url.clone(),
+            email_url: url,
+            timeout_seconds,
+            ..f.config.clone()
+        },
+    )
+    .unwrap();
+    (worker, seen, task)
+}
+
+/// Creates a deleting tenant that still owns a provider subscription, past reporting grace, with a
+/// queued deletion cancel job. Deletion started one day longer ago than the configured grace
+/// period, so the fixture stays past grace whatever the configured period is.
+async fn deleting_tenant(f: &Fixture, name: &str) -> (uuid::Uuid, uuid::Uuid) {
+    let tenant = tenant(f, name).await;
+    sqlx::query("UPDATE tenants SET external_subscription_id='sub_fixture',deleting_at=now()-make_interval(secs=>$2::double precision) WHERE id=$1")
+        .bind(tenant).bind((f.config.reporting_grace_seconds + 86_400) as f64).execute(&f.db).await.unwrap();
+    let cancel = job(f, tenant, "cancel", "pending", 0, "", "").await;
+    (tenant, cancel)
+}
+
+async fn metering_job(f: &Fixture, tenant: uuid::Uuid, state: &str, future: bool) -> uuid::Uuid {
+    let id = uuid::Uuid::now_v7();
+    sqlx::query("INSERT INTO jobs(id,tenant_id,kind,dedup_key,payload,state,attempts,error_category,available_at,created_at,updated_at) VALUES($1,$2,'metering',$1::text,'{}',$3,0,$4,CASE WHEN $5 THEN now()+interval '7 days' ELSE now() END,now(),now())")
+        .bind(id).bind(tenant).bind(state).bind(if state == "failed" { "retry_exhausted" } else { "" }).bind(future).execute(&f.db).await.unwrap();
+    id
+}
+
+async fn attempts(f: &Fixture, id: uuid::Uuid) -> i32 {
+    sqlx::query_scalar("SELECT attempts FROM jobs WHERE id=$1")
+        .bind(id)
+        .fetch_one(&f.db)
+        .await
+        .unwrap()
+}
+
+fn cancel_requests(seen: &std::sync::Mutex<Vec<String>>) -> usize {
+    seen.lock()
+        .unwrap()
+        .iter()
+        .filter(|path| path.ends_with("/cancel"))
+        .count()
+}
+
+#[tokio::test]
+#[ignore = "requires a disposable PostgreSQL database"]
+async fn deleting_cancellation_waits_for_unfinished_metering_work() {
+    let f = Fixture::setup().await;
+    f.bootstrap().await;
+    let (worker, seen, mock) = mock_worker(&f, f.config.timeout_seconds).await;
+    for (kind, future) in [("failed", false), ("pending", true)] {
+        let (tenant, cancel) = deleting_tenant(&f, "Deferred cancel").await;
+        let metering = metering_job(&f, tenant, kind, future).await;
+        for _ in 0..3 {
+            worker.step().await.unwrap();
+        }
+        assert_eq!(
+            state(&f, cancel).await,
+            ("pending".into(), "final_settlement_pending".into()),
+            "{kind} metering must defer cancellation"
+        );
+        assert_eq!(
+            attempts(&f, cancel).await,
+            0,
+            "deferral keeps the retry budget"
+        );
+        assert_eq!(
+            state(&f, metering).await.0,
+            kind,
+            "metering work is untouched"
+        );
+        assert_eq!(cancel_requests(&seen), 0, "no provider cancel request");
+    }
+    // Once the metering work is done and nothing else is outstanding, cancellation proceeds.
+    let (tenant, cancel) = deleting_tenant(&f, "Released cancel").await;
+    let metering = metering_job(&f, tenant, "failed", false).await;
+    sqlx::query("UPDATE jobs SET state='done',error_category='' WHERE id=$1")
+        .bind(metering)
+        .execute(&f.db)
+        .await
+        .unwrap();
+    let other = tenant_other_unfinished(&f).await;
+    for _ in 0..3 {
+        worker.step().await.unwrap();
+    }
+    assert_eq!(
+        state(&f, other).await.0,
+        "failed",
+        "other tenant work is untouched"
+    );
+    assert_eq!(
+        state(&f, cancel).await,
+        ("reconcile".into(), "awaiting_provider_event".into())
+    );
+    assert_eq!(cancel_requests(&seen), 1);
+    mock.abort();
+}
+
+/// An already admitted reporting request holds the state-transition lock and commits a new
+/// metering job. The final cancellation check must wait for it and then see the job, instead of
+/// reading a snapshot from before the commit and canceling the subscription.
+#[tokio::test]
+#[ignore = "requires a disposable PostgreSQL database"]
+async fn deleting_cancellation_check_waits_for_an_admitted_reporting_transaction() {
+    let f = Fixture::setup().await;
+    f.bootstrap().await;
+    let (worker, seen, mock) = mock_worker(&f, f.config.timeout_seconds).await;
+    let (tenant, _cancel) = deleting_tenant(&f, "Fenced cancel").await;
+    let worker = std::sync::Arc::new(worker);
+    let mut admitted = f.db.begin().await.unwrap();
+    sqlx::query("SELECT pg_advisory_xact_lock(41820003)")
+        .execute(&mut *admitted)
+        .await
+        .unwrap();
+    let check = tokio::spawn({
+        let worker = worker.clone();
+        async move { worker.deleting_cancellation_waits(tenant).await.unwrap() }
+    });
+    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    assert!(
+        !check.is_finished(),
+        "the final check must wait for the admitted reporting transaction"
+    );
+    sqlx::query("INSERT INTO jobs(id,tenant_id,kind,dedup_key,payload,state,attempts,error_category,available_at,created_at,updated_at) VALUES($1,$2,'metering',$1::text,'{}','pending',0,'',now(),now(),now())")
+        .bind(uuid::Uuid::now_v7()).bind(tenant).execute(&mut *admitted).await.unwrap();
+    admitted.commit().await.unwrap();
+    assert!(
+        check.await.unwrap(),
+        "the check must observe the job committed by the admitted request"
+    );
+    assert_eq!(cancel_requests(&seen), 0);
+    mock.abort();
+}
+
+/// Another state-transition transaction holds the lock longer than the request timeout while the
+/// claimed cancellation waits for its final check. No provider request was sent, so the job must
+/// return to the pending final-settlement wait with its attempt refunded, not become ambiguous
+/// reconciliation work, and a later pass must send the cancellation.
+#[tokio::test]
+#[ignore = "requires a disposable PostgreSQL database"]
+async fn deleting_cancellation_lock_wait_timeout_stays_pending() {
+    let f = Fixture::setup().await;
+    f.bootstrap().await;
+    let (worker, seen, mock) = mock_worker(&f, 2).await;
+    let worker = std::sync::Arc::new(worker);
+    let (_tenant, cancel) = deleting_tenant(&f, "Locked cancel").await;
+    // The claim made by `step`: running, with the attempt counted and the request not sent.
+    assert_eq!(worker.claim_next_job().await.unwrap(), Some(cancel));
+    let mut holder = f.db.begin().await.unwrap();
+    sqlx::query("SELECT pg_advisory_xact_lock(41820003)")
+        .execute(&mut *holder)
+        .await
+        .unwrap();
+    let run = tokio::spawn({
+        let worker = worker.clone();
+        async move { worker.run_running_job(cancel).await.unwrap() }
+    });
+    // The check times out after two seconds and recording that outcome waits for the lock for up
+    // to two more. Release in between, with a second of margin on both sides for a loaded host.
+    tokio::time::sleep(std::time::Duration::from_millis(3_000)).await;
+    assert!(
+        !run.is_finished(),
+        "recording the deferral waits for the held lock"
+    );
+    holder.commit().await.unwrap();
+    run.await.unwrap();
+    assert_eq!(
+        state(&f, cancel).await,
+        ("pending".into(), "final_settlement_pending".into()),
+        "a lock-wait timeout before any provider request is not an ambiguous outcome"
+    );
+    assert_eq!(
+        attempts(&f, cancel).await,
+        0,
+        "the deferral refunds the attempt"
+    );
+    assert_eq!(cancel_requests(&seen), 0, "no provider cancel request");
+    sqlx::query("UPDATE jobs SET available_at=now() WHERE id=$1")
+        .bind(cancel)
+        .execute(&f.db)
+        .await
+        .unwrap();
+    for _ in 0..3 {
+        worker.step().await.unwrap();
+    }
+    assert_eq!(
+        state(&f, cancel).await,
+        ("reconcile".into(), "awaiting_provider_event".into())
+    );
+    assert_eq!(cancel_requests(&seen), 1, "the later pass sends the cancel");
+    mock.abort();
+}
+
+/// The worker is stopped (graceful shutdown dropping the step, or a crash) while the claimed
+/// cancellation waits for its final check, so no provider request was sent. Restart recovery must
+/// put the job back to pending with its attempt refunded, not turn it into reconciliation work
+/// that only polls the still-active subscription, and the cancellation must then be sent once.
+#[tokio::test]
+#[ignore = "requires a disposable PostgreSQL database"]
+async fn deleting_cancellation_interrupted_before_the_request_is_resent_once() {
+    let f = Fixture::setup().await;
+    f.bootstrap().await;
+    let (worker, seen, mock) = mock_worker(&f, f.config.timeout_seconds).await;
+    let worker = std::sync::Arc::new(worker);
+    let (_tenant, cancel) = deleting_tenant(&f, "Interrupted cancel").await;
+    // Only the cancellation is ready, so the real claim selects it.
+    sqlx::query("UPDATE jobs SET state='done' WHERE id<>$1 AND kind<>'metering'")
+        .bind(cancel)
+        .execute(&f.db)
+        .await
+        .unwrap();
+    assert_eq!(worker.claim_next_job().await.unwrap(), Some(cancel));
+    assert_eq!(state(&f, cancel).await.0, "running");
+    let mut holder = f.db.begin().await.unwrap();
+    sqlx::query("SELECT pg_advisory_xact_lock(41820003)")
+        .execute(&mut *holder)
+        .await
+        .unwrap();
+    let run = tokio::spawn({
+        let worker = worker.clone();
+        async move {
+            let _ = worker.run_running_job(cancel).await;
+        }
+    });
+    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    assert!(!run.is_finished(), "the final check waits for the lock");
+    // Dropping the in-flight step is what `Worker::run` does on shutdown.
+    run.abort();
+    let _ = run.await;
+    holder.rollback().await.unwrap();
+    assert_eq!(
+        state(&f, cancel).await.0,
+        "running",
+        "nothing finished the job"
+    );
+    assert_eq!(cancel_requests(&seen), 0, "no provider cancel request");
+    // Restart.
+    worker.recover().await.unwrap();
+    assert_eq!(
+        state(&f, cancel).await,
+        ("pending".into(), "final_settlement_pending".into()),
+        "an interruption before the provider request is not an ambiguous outcome"
+    );
+    assert_eq!(
+        attempts(&f, cancel).await,
+        0,
+        "recovery refunds the attempt"
+    );
+    for _ in 0..3 {
+        worker.step().await.unwrap();
+    }
+    assert_eq!(
+        state(&f, cancel).await,
+        ("reconcile".into(), "awaiting_provider_event".into())
+    );
+    assert_eq!(cancel_requests(&seen), 1, "the cancel is sent exactly once");
+    worker.recover().await.unwrap();
+    worker.step().await.unwrap();
+    assert_eq!(cancel_requests(&seen), 1, "later passes never resend it");
+    mock.abort();
+}
+
+/// Once the cancel request may have reached the provider, an interruption must reconcile the job
+/// instead of resending, and a reconciliation claim that is interrupted stays reconciliation work.
+#[tokio::test]
+#[ignore = "requires a disposable PostgreSQL database"]
+async fn deleting_cancellation_interrupted_after_the_request_is_reconciled() {
+    let f = Fixture::setup().await;
+    f.bootstrap().await;
+    let (worker, seen, mock) = mock_worker(&f, f.config.timeout_seconds).await;
+    let (_tenant, started) = deleting_tenant(&f, "Started cancel").await;
+    let (_tenant, reconciling) = deleting_tenant(&f, "Reconciling cancel").await;
+    sqlx::query(
+        "UPDATE jobs SET state='running',attempts=1,error_category='request_started' WHERE id=$1",
+    )
+    .bind(started)
+    .execute(&f.db)
+    .await
+    .unwrap();
+    sqlx::query("UPDATE jobs SET state='running',attempts=2,error_category='awaiting_renewal',external_id='sub_fixture' WHERE id=$1")
+        .bind(reconciling)
+        .execute(&f.db)
+        .await
+        .unwrap();
+    worker.recover().await.unwrap();
+    for id in [started, reconciling] {
+        assert_eq!(state(&f, id).await.0, "reconcile");
+    }
+    assert_eq!(attempts(&f, started).await, 1, "the attempt stays counted");
+    assert_eq!(cancel_requests(&seen), 0, "recovery sends nothing");
+    mock.abort();
+}
+
+/// The `request_started` marker is persisted before the provider request, so a crash right after
+/// that write leaves a reconciled cancellation that never reached the provider. Reconciliation
+/// must tell the two apart through the provider's scheduled cancellation: without one it returns
+/// the job to pending and the cancel is sent once, with one it keeps waiting for the renewal.
+#[tokio::test]
+#[ignore = "requires a disposable PostgreSQL database"]
+async fn deleting_cancellation_marked_started_but_never_sent_is_resent_once() {
+    let f = Fixture::setup().await;
+    f.bootstrap().await;
+    let (worker, seen, mock) = mock_worker(&f, f.config.timeout_seconds).await;
+    let (_tenant, cancel) = deleting_tenant(&f, "Marked but unsent cancel").await;
+    // Only the cancellation is ready, so the real claim selects it.
+    sqlx::query("UPDATE jobs SET state='done' WHERE id<>$1 AND kind<>'metering'")
+        .bind(cancel)
+        .execute(&f.db)
+        .await
+        .unwrap();
+    assert_eq!(worker.claim_next_job().await.unwrap(), Some(cancel));
+    // The marker write committed, then the process stopped before the request began.
+    sqlx::query("UPDATE jobs SET error_category='request_started' WHERE id=$1")
+        .bind(cancel)
+        .execute(&f.db)
+        .await
+        .unwrap();
+    worker.recover().await.unwrap();
+    assert_eq!(state(&f, cancel).await.0, "reconcile");
+    assert_eq!(cancel_requests(&seen), 0, "nothing reached the provider");
+    for _ in 0..3 {
+        worker.step().await.unwrap();
+    }
+    assert_eq!(
+        state(&f, cancel).await,
+        ("pending".into(), "cancellation_not_scheduled".into()),
+        "no scheduled cancellation means the request never took effect"
+    );
+    assert_eq!(cancel_requests(&seen), 0, "reconciliation only reads");
+    sqlx::query("UPDATE jobs SET available_at=now() WHERE id=$1")
+        .bind(cancel)
+        .execute(&f.db)
+        .await
+        .unwrap();
+    for _ in 0..3 {
+        worker.step().await.unwrap();
+    }
+    assert_eq!(
+        state(&f, cancel).await,
+        ("reconcile".into(), "awaiting_provider_event".into())
+    );
+    assert_eq!(cancel_requests(&seen), 1, "the cancel is sent exactly once");
+    // The provider now reports the scheduled cancellation, so reconciliation keeps waiting.
+    sqlx::query("UPDATE jobs SET available_at=now() WHERE id=$1")
+        .bind(cancel)
+        .execute(&f.db)
+        .await
+        .unwrap();
+    for _ in 0..3 {
+        worker.step().await.unwrap();
+    }
+    assert_eq!(
+        state(&f, cancel).await,
+        ("reconcile".into(), "awaiting_renewal".into())
+    );
+    assert_eq!(
+        cancel_requests(&seen),
+        1,
+        "a scheduled cancel is not resent"
+    );
+    mock.abort();
+}
+
+async fn tenant_other_unfinished(f: &Fixture) -> uuid::Uuid {
+    let other = tenant(f, "Other tenant").await;
+    metering_job(f, other, "failed", false).await
+}
+
+#[tokio::test]
+#[ignore = "requires a disposable PostgreSQL database"]
+async fn deleting_cancellation_still_waits_for_settlement_after_metering() {
+    let f = Fixture::setup().await;
+    f.bootstrap().await;
+    let (worker, seen, mock) = mock_worker(&f, f.config.timeout_seconds).await;
+    let (tenant, cancel) = deleting_tenant(&f, "Settlement wait").await;
+    sqlx::query("INSERT INTO ledger(id,tenant_id,kind,amount,period_start,period_end,source_key,created_at) VALUES($1,$2,'postpaid',-10,now()-interval '40 days',now()-interval '10 days','debt-fixture',now())")
+        .bind(uuid::Uuid::now_v7()).bind(tenant).execute(&f.db).await.unwrap();
+    let metering = metering_job(&f, tenant, "done", false).await;
+    for _ in 0..3 {
+        worker.step().await.unwrap();
+    }
+    assert_eq!(
+        state(&f, cancel).await,
+        ("pending".into(), "final_settlement_pending".into())
+    );
+    assert_eq!(state(&f, metering).await.0, "done");
+    assert_eq!(
+        cancel_requests(&seen),
+        0,
+        "postpaid debt defers cancellation"
+    );
+    mock.abort();
+}
+
+#[tokio::test]
+#[ignore = "requires a disposable PostgreSQL database"]
+async fn ordinary_cancellation_ignores_unfinished_metering_work() {
+    let f = Fixture::setup().await;
+    f.bootstrap().await;
+    let (worker, seen, mock) = mock_worker(&f, f.config.timeout_seconds).await;
+    let (tenant, cancel) = deleting_tenant(&f, "Ordinary cancel").await;
+    sqlx::query("UPDATE tenants SET deleting_at=NULL WHERE id=$1")
+        .bind(tenant)
+        .execute(&f.db)
+        .await
+        .unwrap();
+    metering_job(&f, tenant, "failed", false).await;
+    for _ in 0..3 {
+        worker.step().await.unwrap();
+    }
+    assert_eq!(
+        state(&f, cancel).await,
+        ("reconcile".into(), "awaiting_provider_event".into())
+    );
+    assert_eq!(cancel_requests(&seen), 1);
+    mock.abort();
+}
