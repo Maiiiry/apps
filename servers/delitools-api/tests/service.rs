@@ -773,6 +773,49 @@ async fn each_request_executes_anew_without_replay() {
     assert_eq!(h.gateway.calls(), 2);
 }
 
+#[tokio::test]
+async fn an_unrepresentable_execution_timeout_fails_closed_without_panicking() {
+    // Config::validate rejects this at startup; the service must still not panic if a Config
+    // bypasses validation.
+    for timeout in [
+        std::time::Duration::MAX,
+        std::time::Duration::MAX - std::time::Duration::from_secs(5),
+    ] {
+        let h = Harness::start_with(None, |c| c.limits.execution_timeout = timeout).await;
+        for method in ["Translate", "Extract"] {
+            let body = if method == "Translate" {
+                translate_body(&["a"])
+            } else {
+                extract_body()
+            };
+            let wire = h.call(method, Some(USER_TOKEN), body).await;
+            assert_eq!(wire.code(), "internal", "{method}");
+            assert_eq!(wire.status, 500, "{method}");
+            assert!(wire.request_id_header.is_some(), "{method}");
+        }
+        assert_eq!(h.gateway.calls(), 0);
+    }
+}
+
+#[tokio::test]
+async fn long_supported_timeouts_keep_authentication_and_timeout_behavior() {
+    let h = Harness::start_with(None, |c| {
+        c.limits.execution_timeout = std::time::Duration::from_secs(30 * 24 * 3600)
+    })
+    .await;
+    for method in ["Translate", "Extract"] {
+        let wire = h.call(method, None, translate_body(&["a"])).await;
+        assert_eq!(wire.reason(), "ERROR_REASON_UNAUTHENTICATED", "{method}");
+    }
+    let h = Harness::start_with(None, |c| {
+        c.limits.execution_timeout = std::time::Duration::from_millis(200)
+    })
+    .await;
+    h.gateway.push(Reply::Hang);
+    let wire = h.translate(USER_TOKEN, translate_body(&["a"])).await;
+    assert_eq!(wire.reason(), "ERROR_REASON_TIMEOUT");
+}
+
 // The cases below run through the production shared transport (`transport::serve`) rather than
 // `axum::serve`, with a socket idle-read interval far below the execution budget. reqwest keeps
 // its connection open after sending the whole request, as an ordinary HTTP/1 client does.
