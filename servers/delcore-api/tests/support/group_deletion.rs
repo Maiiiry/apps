@@ -536,7 +536,7 @@ async fn schema_13_database_with_crossed_names_upgrades_in_place() {
             .fetch_all(&db)
             .await
             .unwrap();
-    assert_eq!(versions, (1..=14).collect::<Vec<_>>());
+    assert_eq!(versions, (1..=15).collect::<Vec<_>>());
     let rows: i64 = sqlx::query_scalar("SELECT count(*) FROM groups WHERE tenant_id=$1")
         .bind(tenant)
         .fetch_one(&db)
