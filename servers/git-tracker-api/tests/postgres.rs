@@ -11,7 +11,13 @@ use server_common::{
     telemetry::{Metrics, Service},
 };
 use sha2::Sha256;
-use std::{sync::Arc, time::Duration};
+use std::{
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+    time::Duration,
+};
 const KEY: &[u8] = include_bytes!("fixtures/github-test-key.pem");
 #[tokio::test]
 #[ignore = "requires a disposable TEST_DATABASE_URL"]
@@ -49,7 +55,9 @@ async fn postgres_permissions_atomic_upload_oidc_visibility_and_cleanup() {
     let actor_mock = actor.clone();
     let finalized = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
     let finalized_mock = finalized.clone();
-    let mock=Router::new().route("/delcore.v1.DelcoreService/CheckTenantLifecycle",post(move||{let finalized=finalized_mock.clone();async move{Json(json!({"finalizedTenantIds":*finalized.lock().unwrap()}))}})).fallback(move|r:Request|{let commit=commit_mock.clone();let actor=actor_mock.clone();async move{
+    let metadata_private = Arc::new(AtomicBool::new(false));
+    let metadata_private_mock = metadata_private.clone();
+    let mock=Router::new().route("/delcore.v1.DelcoreService/CheckTenantLifecycle",post(move||{let finalized=finalized_mock.clone();async move{Json(json!({"finalizedTenantIds":*finalized.lock().unwrap()}))}})).fallback(move|r:Request|{let commit=commit_mock.clone();let actor=actor_mock.clone();let metadata_private=metadata_private_mock.clone();async move{
         let p=r.uri().path();let auth=r.headers().get("authorization").and_then(|v|v.to_str().ok()).unwrap_or("");
         let out=match p{
             "/token"=>json!({"access_token":"service","expires_in":3600}),
@@ -58,7 +66,7 @@ async fn postgres_permissions_atomic_upload_oidc_visibility_and_cleanup() {
             "/delcore.v1.DelcoreService/Authorize"=>json!({"allowed":true}),
             "/user"=>json!({"id":7}),
             "/repos/owner/repo/pulls/1"=>json!({"base":{"ref":"main","sha":commit},"head":{"sha":commit}}),
-            "/repos/owner/repo"|"/repositories/42"=>json!({"id":42,"full_name":"owner/repo","private":false,"permissions":{"admin":true}}),
+            "/repos/owner/repo"|"/repositories/42"=>json!({"id":42,"full_name":"owner/repo","private":metadata_private.load(Ordering::SeqCst),"permissions":{"admin":true}}),
             "/repos/owner/repo/installation"=>json!({"id":1}),
             "/app/installations/1/access_tokens"=>json!({"token":"installation"}),
             p if p.starts_with("/repos/owner/repo/commits/")=>json!({"sha":commit,"parents":[]}),
@@ -91,7 +99,7 @@ async fn postgres_permissions_atomic_upload_oidc_visibility_and_cleanup() {
             EncodingKey::from_rsa_pem(KEY).unwrap(),
         ),
         actions: Actions::new(http.clone(), format!("{base}/jwks"), jwks),
-        audit_retention: chrono::Duration::days(90),
+        audit_retention: chrono::Duration::hours(9_999_999_999),
         webhook_secret: "fixture-only".into(),
         metrics: Arc::new(Metrics::new(Service::GitTracker)),
     });
@@ -260,6 +268,15 @@ async fn postgres_permissions_atomic_upload_oidc_visibility_and_cleanup() {
     assert!(revoked.get("code").is_none());
     let (_, denied) = call(&http, &base, "Complete", &auth, json!({"context":context})).await;
     assert_eq!(denied["code"], "unauthenticated");
+    metadata_private.store(true, Ordering::SeqCst);
+    server.maintain().await.unwrap();
+    let public: bool =
+        sqlx::query_scalar("SELECT public FROM git_tracker_repositories WHERE id::text=$1")
+            .bind(&rid)
+            .fetch_one(&db)
+            .await
+            .unwrap();
+    assert!(!public);
     let event = serde_json::to_vec(&json!({"action":"deleted","installation":{"id":1}})).unwrap();
     assert!(
         server
@@ -333,10 +350,22 @@ async fn postgres_permissions_atomic_upload_oidc_visibility_and_cleanup() {
     stale["execution"]["context"]["execution_id"] = json!("stale-maintenance");
     sqlx::query("UPDATE git_tracker_repositories SET state=jsonb_set(state,ARRAY['records','stale-maintenance'],$2) WHERE id::text=$1")
         .bind(&rid).bind(&stale).execute(&db).await.unwrap();
+    let retained_space = uuid::Uuid::now_v7();
+    sqlx::query("INSERT INTO git_tracker_audit (id,space_id,action,correlation_id,created_at) VALUES ($1,$2,'retained', $3,$4)")
+        .bind(uuid::Uuid::now_v7()).bind(retained_space).bind(uuid::Uuid::now_v7())
+        .bind(chrono::Utc::now() - chrono::Duration::days(1000))
+        .execute(&db).await.unwrap();
     server.maintain().await.unwrap();
     assert_eq!(events.get(), before + 2);
     server.maintain().await.unwrap();
     assert_eq!(events.get(), before + 2);
+    let audit_count: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM git_tracker_audit WHERE space_id=$1")
+            .bind(retained_space)
+            .fetch_one(&db)
+            .await
+            .unwrap();
+    assert_eq!(audit_count, 1);
     let (status, _) = call(
         &http,
         &base,
@@ -348,11 +377,66 @@ async fn postgres_permissions_atomic_upload_oidc_visibility_and_cleanup() {
     assert_eq!(status, StatusCode::OK);
     finalized.lock().unwrap().push(space);
     server.maintain().await.unwrap();
+    let audit_count: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM git_tracker_audit WHERE space_id=$1")
+            .bind(retained_space)
+            .fetch_one(&db)
+            .await
+            .unwrap();
+    assert_eq!(audit_count, 1);
     let count: i64 = sqlx::query_scalar("SELECT count(*) FROM git_tracker_repositories")
         .fetch_one(&db)
         .await
         .unwrap();
     assert_eq!(count, 0);
+    let fixed = chrono::DateTime::parse_from_rfc3339("2026-10-22T00:00:00Z")
+        .unwrap()
+        .with_timezone(&chrono::Utc);
+    let cutoff = fixed - chrono::Duration::hours(2160);
+    let boundary_space = uuid::Uuid::now_v7();
+    for (action, at) in [
+        ("older", cutoff - chrono::Duration::microseconds(1)),
+        ("equal", cutoff),
+        ("newer", cutoff + chrono::Duration::microseconds(1)),
+    ] {
+        sqlx::query("INSERT INTO git_tracker_audit (id,space_id,action,correlation_id,created_at) VALUES ($1,$2,$3,$4,$5)")
+            .bind(uuid::Uuid::now_v7()).bind(boundary_space).bind(action)
+            .bind(uuid::Uuid::now_v7()).bind(at).execute(&db).await.unwrap();
+    }
+    let ordinary_server = Server {
+        db: db.clone(),
+        authority: Authority::new(
+            http.clone(),
+            base.clone(),
+            format!("{base}/token"),
+            "resource".into(),
+            "client".into(),
+            "fixture".into(),
+        ),
+        github: GitHub::new(
+            http.clone(),
+            base.clone(),
+            "1".into(),
+            EncodingKey::from_rsa_pem(KEY).unwrap(),
+        ),
+        actions: Actions::new(
+            http.clone(),
+            format!("{base}/jwks"),
+            serde_json::from_value(json!({"keys":[]})).unwrap(),
+        ),
+        audit_retention: chrono::Duration::hours(2160),
+        webhook_secret: "fixture-only".into(),
+        metrics: Arc::new(Metrics::new(Service::GitTracker)),
+    };
+    ordinary_server.expire_audit_at(fixed).await.unwrap();
+    let remaining: Vec<String> = sqlx::query_scalar(
+        "SELECT action FROM git_tracker_audit WHERE space_id=$1 ORDER BY action",
+    )
+    .bind(boundary_space)
+    .fetch_all(&db)
+    .await
+    .unwrap();
+    assert_eq!(remaining, ["equal", "newer"]);
     let failures = server
         .metrics
         .events

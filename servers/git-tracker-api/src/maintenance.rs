@@ -1,9 +1,15 @@
 // SPDX-License-Identifier: FSL-1.1-ALv2
 use crate::{Server, audit, repository};
+use chrono::{DateTime, Utc};
 use hmac::{Hmac, Mac};
 use serde_json::Value;
 use server_common::{Fault, Result, integer, now, string, uuid};
 use sha2::Sha256;
+
+fn audit_cutoff(at: DateTime<Utc>, retention: chrono::Duration) -> Option<DateTime<Utc>> {
+    at.checked_sub_signed(retention)
+}
+
 impl Server {
     pub async fn maintain(&self) -> Result<()> {
         let spaces: Vec<uuid::Uuid> = sqlx::query_scalar(
@@ -87,10 +93,17 @@ impl Server {
                 tracing::info!(count, "executions interrupted");
             }
         }
-        sqlx::query("DELETE FROM git_tracker_audit WHERE created_at<$1")
-            .bind(now() - self.audit_retention)
-            .execute(&self.db)
-            .await?;
+        self.expire_audit_at(now()).await?;
+        Ok(())
+    }
+
+    pub async fn expire_audit_at(&self, at: DateTime<Utc>) -> Result<()> {
+        if let Some(cutoff) = audit_cutoff(at, self.audit_retention) {
+            sqlx::query("DELETE FROM git_tracker_audit WHERE created_at<$1")
+                .bind(cutoff)
+                .execute(&self.db)
+                .await?;
+        }
         Ok(())
     }
     pub async fn webhook(&self, event_type: &str, signature: &str, raw: &[u8]) -> Result<()> {
@@ -150,5 +163,28 @@ impl Server {
         }
         tx.commit().await?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::{Duration, TimeZone};
+
+    #[test]
+    fn audit_cutoff_preserves_representable_and_minimum_boundaries() {
+        let at = Utc.with_ymd_and_hms(2026, 10, 22, 0, 0, 0).unwrap();
+        let ordinary = audit_cutoff(at, Duration::hours(2160)).unwrap();
+        assert_eq!(
+            ordinary,
+            Utc.with_ymd_and_hms(2026, 7, 24, 0, 0, 0).unwrap()
+        );
+        assert!(ordinary - Duration::microseconds(1) < ordinary);
+        assert!(ordinary + Duration::microseconds(1) > ordinary);
+
+        let maximum = at.signed_duration_since(DateTime::<Utc>::MIN_UTC);
+        assert_eq!(audit_cutoff(at, maximum), Some(DateTime::<Utc>::MIN_UTC));
+        assert_eq!(audit_cutoff(at, maximum + Duration::microseconds(1)), None);
+        assert_eq!(audit_cutoff(at, Duration::hours(9_999_999_999)), None);
     }
 }

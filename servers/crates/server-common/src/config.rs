@@ -121,6 +121,30 @@ mod tests {
     }
 
     #[test]
+    fn accepts_large_audit_retention_without_changing_duration_rejections() {
+        // This test owns its process-wide environment key, so concurrent tests cannot observe it.
+        const KEY: &str = "SERVER_COMMON_TEST_AUDIT_RETENTION";
+        // SAFETY: no other test reads this key.
+        unsafe { env::set_var(KEY, "9999999999h") };
+        let large = duration(KEY, Duration::from_secs(1)).unwrap();
+        assert_eq!(large.as_secs(), 35_999_999_996_400);
+        assert_eq!(
+            chrono::Duration::from_std(large).unwrap().num_seconds(),
+            35_999_999_996_400
+        );
+        // SAFETY: no other test reads this key.
+        unsafe { env::set_var(KEY, "2160h") };
+        let ordinary = duration(KEY, Duration::from_secs(1)).unwrap();
+        assert_eq!(ordinary.as_secs(), 7_776_000);
+        assert_eq!(
+            chrono::Duration::from_std(ordinary).unwrap(),
+            chrono::Duration::days(90)
+        );
+        // SAFETY: no other test reads this key.
+        unsafe { env::remove_var(KEY) };
+    }
+
+    #[test]
     fn unset_or_empty_value_uses_default() {
         let default = Duration::from_secs(300);
         // These keys are private to this test, so mutating them cannot race other tests.
