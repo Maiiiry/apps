@@ -389,6 +389,15 @@ async fn postgres_permissions_atomic_upload_oidc_visibility_and_cleanup() {
         .await
         .unwrap();
     assert_eq!(count, 0);
+    server.maintain().await.unwrap();
+    server.maintain().await.unwrap();
+    let audit_count: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM git_tracker_audit WHERE space_id=$1")
+            .bind(retained_space)
+            .fetch_one(&db)
+            .await
+            .unwrap();
+    assert_eq!(audit_count, 1);
     let fixed = chrono::DateTime::parse_from_rfc3339("2026-10-22T00:00:00Z")
         .unwrap()
         .with_timezone(&chrono::Utc);
