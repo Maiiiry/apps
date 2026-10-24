@@ -6,7 +6,13 @@
 mod common;
 
 use common::*;
+use delitools_api::delcore::IngestFailure;
 use serde_json::json;
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
+use uuid::Uuid;
 
 #[tokio::test]
 async fn health_ready_and_metrics_endpoints_respond() {
@@ -871,11 +877,11 @@ async fn a_closed_client_still_cancels_the_provider_call_through_the_shared_tran
 
 fn usage_event() -> delitools_api::delcore::UsageEvent {
     delitools_api::delcore::UsageEvent {
-        request_key: "01900000-0000-7000-8000-0000000000f1".into(),
+        request_key: Uuid::now_v7().to_string(),
         tenant_id: TENANT.into(),
-        event_key: "01900000-0000-7000-8000-0000000000f1:1:in".into(),
+        event_key: format!("{}:1:in", Uuid::now_v7()),
         meter_key: "gem_in".into(),
-        quantity: 100,
+        quantity: 7,
         occurred_at: chrono::Utc::now(),
     }
 }
@@ -918,7 +924,10 @@ async fn invalid_ingest_acknowledgments_are_retryable_malformed_responses() {
             body: body.clone(),
         });
         assert_eq!(
-            h.server.delcore.ingest_event(&usage_event()).await,
+            h.server
+                .delcore
+                .ingest_event(&usage_event(), &|| true)
+                .await,
             Err(delitools_api::delcore::IngestFailure::Retryable(
                 "malformed_response"
             )),
@@ -946,7 +955,10 @@ async fn valid_ingest_acknowledgments_deliver_including_supported_encodings() {
             body: body.clone(),
         });
         assert_eq!(
-            h.server.delcore.ingest_event(&usage_event()).await,
+            h.server
+                .delcore
+                .ingest_event(&usage_event(), &|| true)
+                .await,
             Ok(()),
             "{body}"
         );
@@ -963,7 +975,10 @@ async fn non_object_ingest_bodies_and_poison_classification_are_unchanged() {
             body: body.clone(),
         });
         assert_eq!(
-            h.server.delcore.ingest_event(&usage_event()).await,
+            h.server
+                .delcore
+                .ingest_event(&usage_event(), &|| true)
+                .await,
             Err(IngestFailure::Retryable("malformed_response")),
             "{body}"
         );
@@ -974,7 +989,52 @@ async fn non_object_ingest_bodies_and_poison_classification_are_unchanged() {
         reason: Some(11),
     });
     assert_eq!(
-        h.server.delcore.ingest_event(&usage_event()).await,
+        h.server
+            .delcore
+            .ingest_event(&usage_event(), &|| true)
+            .await,
         Err(IngestFailure::Poison("identity_conflict"))
     );
+}
+
+#[tokio::test]
+async fn ingest_never_starts_a_request_after_the_deadline_passes_during_token_acquisition() {
+    let h = Harness::start(None).await;
+    let live = Arc::new(AtomicBool::new(true));
+    // The token request is still being answered when the row expires.
+    let flag = live.clone();
+    h.delcore.lock().unwrap().on_token =
+        Some(Arc::new(move || flag.store(false, Ordering::SeqCst)));
+    let flag = live.clone();
+    let still_live = move || flag.load(Ordering::SeqCst);
+    let result = h
+        .server
+        .delcore
+        .ingest_event(&usage_event(), &still_live)
+        .await;
+    assert_eq!(result, Err(IngestFailure::Expired));
+    let state = h.delcore.lock().unwrap();
+    assert_eq!(state.token_calls, 1, "the token request itself had started");
+    assert!(state.ingested.is_empty(), "no IngestEvent request was sent");
+}
+
+#[tokio::test]
+async fn ingest_sends_when_the_row_is_still_live_after_the_token_is_available() {
+    let h = Harness::start(None).await;
+    let result = h
+        .server
+        .delcore
+        .ingest_event(&usage_event(), &|| true)
+        .await;
+    assert_eq!(result, Ok(()));
+    assert_eq!(h.delcore.lock().unwrap().ingested.len(), 1);
+    // A cached token is re-checked as well: expiry before the send still sends nothing.
+    let result = h
+        .server
+        .delcore
+        .ingest_event(&usage_event(), &|| false)
+        .await;
+    assert_eq!(result, Err(IngestFailure::Expired));
+    assert_eq!(h.delcore.lock().unwrap().ingested.len(), 1);
+    assert_eq!(h.delcore.lock().unwrap().token_calls, 1);
 }
