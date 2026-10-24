@@ -582,6 +582,10 @@ pub struct Wire {
     pub request_id_header: Option<String>,
     pub retry_after: Option<String>,
     pub body: Value,
+    /// The reply body exactly as received.
+    pub raw: String,
+    /// The reply body bytes, for binary protobuf replies.
+    pub bytes: Vec<u8>,
 }
 
 impl Wire {
@@ -625,6 +629,47 @@ async fn serve(router: Router) -> String {
     let addr = listener.local_addr().unwrap();
     tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
     format!("http://{addr}")
+}
+
+/// Captures the tracing output of the current test thread.
+///
+/// `#[tokio::test]` runs the test, the DeliTools router and the loopback mocks on one thread,
+/// so a thread-local subscriber sees every log line the server writes for the test.
+pub struct LogCapture {
+    buffer: Arc<Mutex<Vec<u8>>>,
+    _guard: tracing::subscriber::DefaultGuard,
+}
+
+#[derive(Clone)]
+struct LogWriter(Arc<Mutex<Vec<u8>>>);
+
+impl std::io::Write for LogWriter {
+    fn write(&mut self, data: &[u8]) -> std::io::Result<usize> {
+        self.0.lock().unwrap().extend_from_slice(data);
+        Ok(data.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+impl LogCapture {
+    pub fn start() -> Self {
+        let buffer = Arc::new(Mutex::new(Vec::new()));
+        let writer = LogWriter(buffer.clone());
+        let subscriber = tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::TRACE)
+            .with_ansi(false)
+            .with_writer(move || writer.clone())
+            .finish();
+        Self {
+            buffer,
+            _guard: tracing::subscriber::set_default(subscriber),
+        }
+    }
+    pub fn text(&self) -> String {
+        String::from_utf8_lossy(&self.buffer.lock().unwrap()).into_owned()
+    }
 }
 
 /// Serves through the production shared transport instead of `axum::serve`, so its idle-read,
@@ -727,17 +772,40 @@ impl Harness {
     }
 
     pub async fn call(&self, method: &str, token: Option<&str>, body: Value) -> Wire {
+        self.post(
+            method,
+            token,
+            "application/json",
+            serde_json::to_vec(&body).unwrap(),
+            None,
+        )
+        .await
+    }
+
+    /// Posts raw bytes with an explicit content type and optional `Origin`; the reply is read
+    /// as Connect JSON, which is also how errors of binary calls are rendered.
+    pub async fn post(
+        &self,
+        method: &str,
+        token: Option<&str>,
+        content_type: &str,
+        body: Vec<u8>,
+        origin: Option<&str>,
+    ) -> Wire {
         let mut request = self
             .client
             .post(format!(
                 "{}/delitools.v1.DelitoolsService/{method}",
                 self.base
             ))
-            .header("Content-Type", "application/json")
+            .header("Content-Type", content_type)
             .header("Connect-Protocol-Version", "1")
-            .json(&body);
+            .body(body);
         if let Some(token) = token {
             request = request.bearer_auth(token);
+        }
+        if let Some(origin) = origin {
+            request = request.header("Origin", origin);
         }
         let response = request.send().await.unwrap();
         let status = response.status().as_u16();
@@ -751,12 +819,15 @@ impl Harness {
             .get("retry-after")
             .and_then(|v| v.to_str().ok())
             .map(str::to_owned);
-        let body = response.json().await.unwrap_or(Value::Null);
+        let bytes = response.bytes().await.unwrap();
+        let body = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
         Wire {
             status,
             request_id_header,
             retry_after,
             body,
+            raw: String::from_utf8_lossy(&bytes).into_owned(),
+            bytes: bytes.to_vec(),
         }
     }
 
@@ -845,18 +916,19 @@ impl Harness {
                 .find(|(k, _)| k.eq_ignore_ascii_case(name))
                 .map(|(_, v)| v.trim().to_owned())
         };
+        let reply_text =
+            if header("transfer-encoding").is_some_and(|v| v.eq_ignore_ascii_case("chunked")) {
+                dechunk(body)
+            } else {
+                body.to_owned()
+            };
         let wire = Wire {
             status,
             request_id_header: header("x-delitools-request-id"),
             retry_after: header("retry-after"),
-            body: serde_json::from_str(&if header("transfer-encoding")
-                .is_some_and(|v| v.eq_ignore_ascii_case("chunked"))
-            {
-                dechunk(body)
-            } else {
-                body.to_owned()
-            })
-            .unwrap_or(Value::Null),
+            body: serde_json::from_str(&reply_text).unwrap_or(Value::Null),
+            bytes: reply_text.clone().into_bytes(),
+            raw: reply_text,
         };
         (wire, elapsed)
     }
@@ -930,6 +1002,8 @@ impl Harness {
             request_id_header,
             retry_after,
             body,
+            raw: String::from_utf8_lossy(&bytes).into_owned(),
+            bytes: bytes.to_vec(),
         }
     }
 
