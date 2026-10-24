@@ -568,6 +568,32 @@ async fn extraction_rejects_unsupported_schemas_before_execution() {
 }
 
 #[tokio::test]
+async fn extraction_rejects_equal_enum_values_before_the_gateway() {
+    let h = Harness::start(None).await;
+    for schema in [
+        r#"{"enum":[1,1.0]}"#,
+        r#"{"enum":[0,-0.0]}"#,
+        r#"{"type":"object","properties":{"value":{"enum":[[1],[1.0]]}}}"#,
+    ] {
+        let mut body = extract_body();
+        body["jsonSchema"] = json!(schema);
+        let wire = h.extract(USER_TOKEN, body).await;
+        assert_eq!(wire.code(), "invalid_argument", "{schema}");
+        assert_eq!(wire.reason(), "ERROR_REASON_UNSUPPORTED_SCHEMA", "{schema}");
+        assert_eq!(h.gateway.calls(), 0, "{schema}");
+    }
+
+    h.gateway
+        .push(Reply::without_usage(&extracted(json!("Ada"))));
+    let mut body = extract_body();
+    body["jsonSchema"] = json!(r#"{"enum":["Ada","Grace"]}"#);
+    let wire = h.extract(USER_TOKEN, body).await;
+    assert!(wire.ok(), "{}", wire.body);
+    assert_eq!(wire.body["json"], r#""Ada""#);
+    assert_eq!(h.gateway.calls(), 1);
+}
+
+#[tokio::test]
 async fn extraction_failures_and_invalid_output_are_distinct_and_never_retried() {
     let h = Harness::start(None).await;
     h.gateway.push(Reply::without_usage(

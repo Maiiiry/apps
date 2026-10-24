@@ -278,7 +278,10 @@ fn check_node(node: &Value, depth: usize, nodes: &mut usize, path: &str) -> Resu
             )));
         }
         for (i, item) in items.iter().enumerate() {
-            if items[..i].contains(item) {
+            if items[..i]
+                .iter()
+                .any(|previous| jsonschema::json::cmp::equal(previous, item))
+            {
                 return Err(unsupported(format!(
                     "enum at {path} must not repeat values"
                 )));
@@ -473,6 +476,50 @@ mod tests {
         ] {
             assert!(validate("t", ok, &limits()).is_ok(), "{ok}");
         }
+    }
+
+    #[test]
+    fn rejects_equal_enum_values_at_root_and_nested_nodes() {
+        for schema in [
+            r#"{"enum":[1,1.0]}"#,
+            r#"{"enum":[0,-0.0]}"#,
+            r#"{"enum":[[1],[1.0]]}"#,
+            r#"{"enum":[{"x":1},{"x":1.0}]}"#,
+            r#"{"enum":[{"a":1,"b":[0]},{"b":[-0.0],"a":1.0}]}"#,
+            r#"{"enum":[9007199254740992,9007199254740992.0]}"#,
+            r#"{"enum":[1,1]}"#,
+            r#"{"enum":[0.0,-0.0]}"#,
+            r#"{"enum":["a","a"]}"#,
+            r#"{"enum":[true,true]}"#,
+            r#"{"enum":[null,null]}"#,
+            r#"{"type":"object","properties":{"x":{"enum":[1,1.0]}}}"#,
+            r#"{"type":"array","items":{"enum":[0,-0.0]}}"#,
+        ] {
+            let error = validate("t", schema, &limits()).unwrap_err();
+            assert_eq!(
+                error.reason,
+                ErrorReason::ERROR_REASON_UNSUPPORTED_SCHEMA,
+                "{schema}"
+            );
+            assert!(error.message.contains("enum at "), "{schema}");
+            assert!(error.message.contains("must not repeat values"), "{schema}");
+        }
+    }
+
+    #[test]
+    fn accepts_distinct_enum_values_without_rounding_large_integers() {
+        for schema in [
+            r#"{"enum":[1]}"#,
+            r#"{"enum":[1,true,"1"]}"#,
+            r#"{"enum":[[1,2],[2,1]]}"#,
+            r#"{"enum":[9007199254740992,9007199254740993]}"#,
+            r#"{"enum":[9007199254740993,9007199254740992.0]}"#,
+        ] {
+            assert!(validate("t", schema, &limits()).is_ok(), "{schema}");
+        }
+        let values: Vec<String> = (0..MAX_ENUM).map(|i| i.to_string()).collect();
+        let schema = format!(r#"{{"enum":[{}]}}"#, values.join(","));
+        assert!(validate("t", &schema, &limits()).is_ok());
     }
 
     #[test]
