@@ -8,13 +8,15 @@ test("isolated projects select only their validation", () => {
     delitools_api: false,
     devbase_api: false,
     git_tracker_api: false,
-    perfine_api: false,
     git_tracker: false,
     devbase: false,
     delino_site: false,
     delino_docs: false,
     delidev: false,
     delitools: true,
+    perfine_api: false,
+    perfine: false,
+    perfine_fixtures: false,
     protocol: false,
   });
   assert.deepEqual(select(["protos/delcore/v1/delcore.proto"]), {
@@ -22,13 +24,15 @@ test("isolated projects select only their validation", () => {
     delitools_api: true,
     devbase_api: true,
     git_tracker_api: true,
-    perfine_api: true,
     git_tracker: true,
     devbase: false,
     delino_site: false,
     delino_docs: false,
     delidev: false,
     delitools: false,
+    perfine_api: true,
+    perfine: true,
+    perfine_fixtures: false,
     protocol: true,
   });
   assert.deepEqual(select(["pnpm-lock.yaml"]), {
@@ -36,13 +40,15 @@ test("isolated projects select only their validation", () => {
     delitools_api: true,
     devbase_api: true,
     git_tracker_api: true,
-    perfine_api: true,
     git_tracker: true,
     devbase: true,
     delino_site: true,
     delino_docs: true,
     delidev: true,
     delitools: true,
+    perfine_api: true,
+    perfine: true,
+    perfine_fixtures: true,
     protocol: true,
   });
 });
@@ -64,13 +70,15 @@ for (const [project, key] of [
         delitools_api: false,
         devbase_api: key === "devbase" && path === "docs/project-devbase.md",
         git_tracker_api: false,
-        perfine_api: false,
         git_tracker: false,
         devbase: key === "devbase",
         delino_site: key === "delino_site",
         delino_docs: key === "delino_docs",
         delidev: false,
         delitools: false,
+        perfine_api: false,
+        perfine: false,
+        perfine_fixtures: false,
         protocol: false,
       });
     }
@@ -83,13 +91,15 @@ test("consumer examples select protocol validation without native runners", () =
     delitools_api: false,
     devbase_api: false,
     git_tracker_api: false,
-    perfine_api: false,
     git_tracker: false,
     devbase: false,
     delino_site: false,
     delino_docs: false,
     delidev: false,
     delitools: false,
+    perfine_api: false,
+    perfine: false,
+    perfine_fixtures: false,
     protocol: true,
   });
 });
@@ -111,7 +121,6 @@ for (const [service, key] of [
   ["delitools-api", "delitools_api"],
   ["devbase-api", "devbase_api"],
   ["git-tracker-api", "git_tracker_api"],
-  ["perfine-api", "perfine_api"],
 ]) {
   test(`${service} changes select only the owning server`, () => {
     for (const path of [
@@ -185,13 +194,15 @@ for (const path of ["Cargo.lock", "prebuilt-dependencies.lock.json"]) {
       delitools_api: false,
       devbase_api: false,
       git_tracker_api: false,
-      perfine_api: false,
       git_tracker: false,
       devbase: false,
       delino_site: false,
       delino_docs: false,
       delidev: true,
       delitools: true,
+      perfine_api: false,
+      perfine: false,
+      perfine_fixtures: path === "Cargo.lock",
       protocol: false,
     });
   });
@@ -203,13 +214,15 @@ test("go.sum selects Go protocol and consumer validation only", () => {
     delitools_api: false,
     devbase_api: false,
     git_tracker_api: false,
-    perfine_api: false,
     git_tracker: false,
     devbase: false,
     delino_site: false,
     delino_docs: false,
     delidev: false,
     delitools: false,
+    perfine_api: false,
+    perfine: false,
+    perfine_fixtures: false,
     protocol: true,
   });
 });
@@ -225,7 +238,10 @@ test("dependency lock selection combines with other changes", () => {
     [["Cargo.lock", "go.sum"], combine(native, go)],
     [
       ["prebuilt-dependencies.lock.json", "apps/delino-docs/src/main.tsx"],
-      combine(native, select(["apps/delino-docs/src/main.tsx"])),
+      combine(
+        select(["prebuilt-dependencies.lock.json"]),
+        select(["apps/delino-docs/src/main.tsx"]),
+      ),
     ],
     [
       ["go.sum", "apps/git-tracker/src/main.tsx"],
@@ -313,6 +329,7 @@ const frontends = [
   "delino_docs",
   "delidev",
   "delitools",
+  "perfine",
 ];
 
 for (const [paths, expected] of [
@@ -327,7 +344,11 @@ for (const [paths, expected] of [
     "scripts/archive.mjs",
   ].map((path) => [
     [path],
-    ["delidev", "delitools", ...(path === "Cargo.toml" ? ["perfine_api"] : [])],
+    [
+      "delidev",
+      "delitools",
+      ...(/^Cargo\./u.test(path) ? ["perfine_fixtures"] : []),
+    ],
   ]),
   ...[".cargo/config.toml", "rust-toolchain", "rust-toolchain.toml"].map(
     (path) => [
@@ -340,6 +361,7 @@ for (const [paths, expected] of [
         "delidev",
         "delitools",
         "perfine_api",
+        "perfine_fixtures",
       ],
     ],
   ),
@@ -353,6 +375,7 @@ for (const [paths, expected] of [
       "git_tracker_api",
       "git_tracker",
       "perfine_api",
+      "perfine",
       "protocol",
     ],
   ],
@@ -365,6 +388,7 @@ for (const [paths, expected] of [
       "git_tracker_api",
       "git_tracker",
       "perfine_api",
+      "perfine",
       "protocol",
     ],
   ],
@@ -490,10 +514,43 @@ test("DeliTools server validation uses its own disposable database", () => {
   );
 });
 
-test("Perfine API and shared engine changes select server validation", () => {
+test("Perfine ownership selects explicit consumers without unknown-path fallback", () => {
+  for (const [path, expected] of [
+    ["crates/perfine-core/src/lib.rs", ["perfine_fixtures"]],
+    ["cmds/perfine/src/main.rs", ["perfine_fixtures"]],
+    ["packages/perfine/package.json", []],
+    ["actions/perfine/src/main.ts", []],
+    ["apps/perfine/src/main.tsx", ["perfine"]],
+    ["servers/perfine-api/src/main.rs", ["perfine_api"]],
+    ["docs/crates-perfine-adapters-contract.md", ["perfine_fixtures"]],
+    [
+      "docs/protos-perfine-v1-contract.md",
+      ["perfine_api", "perfine", "protocol"],
+    ],
+    [
+      "docs/project-perfine.md",
+      ["perfine_api", "perfine", "perfine_fixtures", "protocol"],
+    ],
+  ])
+    assert.deepEqual(selectedJobs([path]), expected, path);
+  for (const path of ["protos/perfine/v1/perfine.proto", "buf.gen.yaml"])
+    for (const key of ["perfine_api", "perfine", "protocol"])
+      assert.equal(select([path])[key], true, `${path}: ${key}`);
+  assert.deepEqual(
+    selectRustServers(select(["crates/perfine-core/src/lib.rs"])),
+    [],
+  );
+  assert.deepEqual(selectChecks(["crates/perfine-core/src/lib.rs"]), {
+    tooling: false,
+    shared_ui: false,
+    workflows: false,
+  });
+});
+
+test("Perfine API and server evaluator changes select server validation", () => {
   for (const path of [
     "servers/perfine-api/src/lib.rs",
-    "crates/perfine-core/src/lib.rs",
+    "servers/perfine-api/src/evaluation/policy.rs",
     "protos/perfine/v1/perfine.proto",
   ]) {
     assert.ok(
