@@ -24,3 +24,5 @@ define.fmt({
     "**/yarn.lock",
   ],
 });
+
+# Automated fix for issue #351: lynx-ui: preserve the gallery web bridge across BFCache restoration
