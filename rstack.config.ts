@@ -24,3 +24,5 @@ define.fmt({
     "**/yarn.lock",
   ],
 });
+
+# Automated fix for issue #1463: anydash: share one deadline across Android widget refreshes
